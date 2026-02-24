@@ -44,7 +44,7 @@ agents:
   # --- Controller deployment ---
 
   image:
-    repository: ghcr.io/alfredjeanlab/gasboat/controller
+    repository: ghcr.io/groblegark/gasboat/controller
     tag: "latest"
     pullPolicy: Always
 
@@ -70,7 +70,7 @@ agents:
 
   # Image used for agent pods spawned by the controller
   agentImage:
-    repository: ghcr.io/alfredjeanlab/gasboat/agent
+    repository: ghcr.io/groblegark/gasboat/agent
     tag: "latest"
 
   # ServiceAccount for spawned agent pods (not the controller itself).
@@ -80,6 +80,10 @@ agents:
     create: true
     name: ""        # defaults to "<release>-agent"
     annotations: {}
+
+  # Default StorageClass for agent workspace PVCs (e.g., "gp2").
+  # If empty, uses cluster default. Project beads can override per-project.
+  agentStorageClass: ""
 
   # Max agent pods that can exist simultaneously (0 = unlimited)
   coopMaxPods: 0
@@ -96,6 +100,15 @@ agents:
   # Mount as ~/.claude/.credentials.json. See scripts/sync-claude-credentials.sh
   claudeOAuthSecret: ""
 
+  # K8s secret with Claude OAuth access token (key: "token").
+  # Injected as CLAUDE_CODE_OAUTH_TOKEN env var. Coop auto-writes .credentials.json
+  # when this is set — preferred over the static credentials secret mount.
+  claudeOAuthTokenSecret: ""
+
+  # K8s secret with Anthropic API key (key: "key").
+  # Injected as ANTHROPIC_API_KEY env var. Fallback when OAuth is unavailable.
+  anthropicApiKeySecret: ""
+
   # Git credentials for agent pods (username/token keys).
   gitCredentials:
     secret: ""           # K8s secret name (created manually or by externalSecret below)
@@ -111,6 +124,9 @@ agents:
   # K8s secret with GitHub token for gh CLI in agent pods (releases, GHCR push)
   githubTokenSecret: ""
 
+  # K8s secret with GitLab token for glab CLI and git clone/push in agent pods
+  gitlabTokenSecret: ""
+
   # --- NATS event bus ---
 
   # NATS server URL for event bus integration (e.g., "nats://nats-svc:4222")
@@ -123,16 +139,6 @@ agents:
 
   # Coopmux URL override (auto-wired when coopmux is enabled in this chart)
   coopmuxURL: ""
-
-  # --- Slack notifications ---
-
-  # Slack notifications for decision beads
-  slack:
-    # NOTE: env var is SLACK_BOAT_TOKEN (not SLACK_BOT_TOKEN) — deliberate "gasboat" pun.
-    botToken: ""
-    signingSecret: ""
-    channel: ""
-    listenAddr: ""
 
   # --- Infrastructure ---
 
@@ -155,7 +161,7 @@ coopmux:
   enabled: false
 
   image:
-    repository: ghcr.io/alfredjeanlab/coop
+    repository: ghcr.io/groblegark/coop
     tag: "coopmux"
     pullPolicy: Always
 
@@ -285,11 +291,11 @@ postgres:
   affinity: {}
 
 # =============================================================================
-# Beads Daemon (bd serve — gRPC + HTTP API backed by PostgreSQL)
+# Beads Daemon (kd serve — gRPC + HTTP API backed by PostgreSQL)
 # =============================================================================
 beads:
   image:
-    repository: ghcr.io/alfredjeanlab/beads/bd
+    repository: ghcr.io/groblegark/kbeads
     tag: "latest"
     pullPolicy: Always
 
@@ -302,7 +308,7 @@ beads:
   natsURL: ""
 
   # Name of K8s secret containing the daemon auth token (key: "token")
-  tokenSecret: bd-beads-token
+  tokenSecret: kd-beads-token
 
   ingress:
     enabled: false
@@ -388,3 +394,51 @@ nats:
   affinity: {}
   nodeSelector: {}
   tolerations: []
+
+# =============================================================================
+# Slack Bridge — standalone beads→Slack notification bridge
+# Watches NATS for decision/mail lifecycle events and notifies Slack.
+# Runs independently from the agent controller (separate deployment).
+# =============================================================================
+slackBridge:
+  enabled: false
+
+  image:
+    repository: ghcr.io/groblegark/gasboat/slack-bridge
+    tag: "latest"
+    pullPolicy: Always
+
+  replicaCount: 1
+
+  # Log level: debug, info, warn, error
+  logLevel: ""
+
+  # NATS URL override (auto-wired when nats.enabled=true)
+  natsURL: ""
+
+  # Slack credentials
+  slack:
+    # Direct values (for dev/testing)
+    botToken: ""
+    appToken: ""      # xapp-... token for Socket Mode (real-time events, interactions, modals)
+    signingSecret: ""
+    channel: ""
+    # K8s secret name with keys: bot-token, app-token, signing-secret (for production)
+    secretName: ""
+
+  service:
+    type: ClusterIP
+    port: 8090
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+  # Pod scheduling
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

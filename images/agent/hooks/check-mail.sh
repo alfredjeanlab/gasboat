@@ -19,7 +19,7 @@ if [ -z "${AGENT_ID}" ]; then
 fi
 
 # Query daemon for open mail assigned to this agent.
-mail_json=$(bd list --type mail --status open --assignee "${AGENT_ID}" --json 2>/dev/null) || exit 0
+mail_json=$(kd list --type mail --status open --assignee "${AGENT_ID}" --json 2>/dev/null) || exit 0
 
 # Check if result is an empty array or empty string.
 if [ -z "${mail_json}" ] || [ "${mail_json}" = "[]" ] || [ "${mail_json}" = "null" ]; then
@@ -51,7 +51,7 @@ You have ${count} unread message(s) in your inbox.
 
 ${bullets}
 
-Run 'bd show <id>' to read a message. Run 'bd close <id>' to mark as read.
+Run 'kd show <id>' to read a message. Run 'kd close <id>' to mark as read.
 </system-reminder>"
 
 # Build JSONL entry and append to queue.

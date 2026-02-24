@@ -1,0 +1,20 @@
+{{- if .Values.slackBridge.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gasboat.fullname" . }}-slack-bridge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gasboat.labels" . | nindent 4 }}
+    app.kubernetes.io/component: slack-bridge
+spec:
+  type: {{ .Values.slackBridge.service.type | default "ClusterIP" }}
+  ports:
+    - port: {{ .Values.slackBridge.service.port | default 8090 }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "gasboat.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: slack-bridge
+{{- end }}

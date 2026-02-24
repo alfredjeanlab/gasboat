@@ -1,119 +1,55 @@
 // Package bridge provides the mail lifecycle watcher.
 //
-// Mail subscribes to plain NATS subjects for bead create events,
+// Mail subscribes to kbeads SSE event stream for bead create events,
 // filters for type=mail beads, and nudges agents when a message
 // requires immediate attention (delivery:interrupt label or high priority).
 package bridge
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/nats-io/nats.go"
+	"gasboat/controller/internal/beadsapi"
 )
 
 // MailConfig holds configuration for the Mail watcher.
 type MailConfig struct {
-	NatsURL   string
-	NatsToken string
-	Daemon    BeadClient
-	Logger    *slog.Logger
+	Daemon BeadClient
+	Logger *slog.Logger
 }
 
-// Mail watches NATS for mail bead lifecycle events.
+// Mail watches the kbeads SSE event stream for mail bead lifecycle events.
 type Mail struct {
-	natsURL  string
-	natsOpts []nats.Option
-	daemon   BeadClient
-	logger   *slog.Logger
-
-	mu   sync.Mutex
-	conn *nats.Conn
+	daemon     BeadClient
+	logger     *slog.Logger
+	httpClient *http.Client // reused for nudge requests
 }
 
 // NewMail creates a new mail lifecycle watcher.
 func NewMail(cfg MailConfig) *Mail {
-	opts := []nats.Option{nats.Name("gasboat-mail")}
-	if cfg.NatsToken != "" {
-		opts = append(opts, nats.Token(cfg.NatsToken))
-	}
 	return &Mail{
-		natsURL:  cfg.NatsURL,
-		natsOpts: opts,
-		daemon:   cfg.Daemon,
-		logger:   cfg.Logger,
+		daemon:     cfg.Daemon,
+		logger:     cfg.Logger,
+		httpClient: &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
-// Start connects to NATS and subscribes to mail bead events.
-// Blocks until ctx is canceled. Reconnects on error.
-func (m *Mail) Start(ctx context.Context) error {
-	backoff := time.Second
-	maxBackoff := 30 * time.Second
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		err := m.run(ctx)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		m.logger.Warn("mail NATS subscription error, reconnecting",
-			"error", err, "backoff", backoff)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(backoff):
-		}
-		backoff *= 2
-		if backoff > maxBackoff {
-			backoff = maxBackoff
-		}
-	}
+// RegisterHandlers registers SSE event handlers on the given stream for
+// mail bead created events.
+func (m *Mail) RegisterHandlers(stream *SSEStream) {
+	stream.On("beads.bead.created", m.handleCreated)
+	m.logger.Info("mail watcher registered SSE handlers",
+		"topics", []string{"beads.bead.created"})
 }
 
-func (m *Mail) run(ctx context.Context) error {
-	nc, err := nats.Connect(m.natsURL, m.natsOpts...)
-	if err != nil {
-		return fmt.Errorf("NATS connect: %w", err)
-	}
-	defer nc.Close()
-
-	m.mu.Lock()
-	m.conn = nc
-	m.mu.Unlock()
-
-	// Subscribe to bead created events (plain NATS, not JetStream).
-	// Only created matters for mail — closing is "mark read", nothing to wake for.
-	created, err := nc.Subscribe("beads.bead.created", func(msg *nats.Msg) {
-		m.handleCreated(ctx, msg)
-	})
-	if err != nil {
-		return fmt.Errorf("subscribe beads.bead.created: %w", err)
-	}
-	defer func() { _ = created.Unsubscribe() }()
-
-	m.logger.Info("mail watcher subscribed to NATS",
-		"url", m.natsURL,
-		"subject", "beads.bead.created")
-
-	<-ctx.Done()
-	return ctx.Err()
-}
-
-func (m *Mail) handleCreated(ctx context.Context, msg *nats.Msg) {
-	var bead BeadEvent
-	if err := json.Unmarshal(msg.Data, &bead); err != nil {
-		m.logger.Debug("skipping malformed bead created event", "error", err)
+func (m *Mail) handleCreated(ctx context.Context, data []byte) {
+	bead := ParseBeadEvent(data)
+	if bead == nil {
+		m.logger.Debug("skipping malformed bead created event")
 		return
 	}
 	if bead.Type != "mail" {
@@ -127,11 +63,11 @@ func (m *Mail) handleCreated(ctx context.Context, msg *nats.Msg) {
 		"priority", bead.Priority)
 
 	// Determine if the agent should be nudged immediately.
-	if !m.shouldNudge(bead) {
+	if !m.shouldNudge(*bead) {
 		return
 	}
 
-	m.nudgeAgent(ctx, bead)
+	m.nudgeAgent(ctx, *bead)
 }
 
 // shouldNudge returns true if the mail bead warrants an immediate agent nudge.
@@ -155,14 +91,14 @@ func (m *Mail) nudgeAgent(ctx context.Context, bead BeadEvent) {
 		return
 	}
 
-	agentBead, err := m.daemon.GetBead(ctx, agentName)
+	agentBead, err := m.daemon.FindAgentBead(ctx, agentName)
 	if err != nil {
 		m.logger.Error("failed to get agent bead for mail nudge",
 			"agent", agentName, "mail", bead.ID, "error", err)
 		return
 	}
 
-	coopURL := agentBead.Fields["coop_url"]
+	coopURL := beadsapi.ParseNotes(agentBead.Notes)["coop_url"]
 	if coopURL == "" {
 		m.logger.Warn("agent bead has no coop_url, cannot nudge",
 			"agent", agentName, "mail", bead.ID)
@@ -178,9 +114,9 @@ func (m *Mail) nudgeAgent(ctx context.Context, bead BeadEvent) {
 		}
 	}
 
-	message := fmt.Sprintf("New mail from %s: %s — run 'bd show %s' to read", sender, bead.Title, bead.ID)
+	message := fmt.Sprintf("New mail from %s: %s — run 'kd show %s' to read", sender, bead.Title, bead.ID)
 
-	if err := nudgeCoop(ctx, coopURL, message); err != nil {
+	if err := nudgeCoop(ctx, m.httpClient, coopURL, message); err != nil {
 		m.logger.Error("failed to nudge agent for mail",
 			"agent", agentName, "coop_url", coopURL, "error", err)
 		return

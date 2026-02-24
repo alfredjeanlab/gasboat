@@ -57,8 +57,11 @@ gasboat/
 │       ├── coopmux/         # Coopmux deployment + service
 │       └── ...              # ExternalSecrets, git credentials
 │
-├── deploy/                  # Example deployment values
-├── Makefile
+├── images/
+│   ├── agent/               # Agent pod image + entrypoint
+│   └── slack-bridge/        # Slack bridge Dockerfile
+│
+├── Makefile                  # Top-level build
 └── README.md
 ```
 

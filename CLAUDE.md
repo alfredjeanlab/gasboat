@@ -1,47 +1,75 @@
-# Gasboat — Development Guide
+# Gasboat
 
-## Architecture: Data Instead of Code
+K8s agent controller and Slack bridge for beads automation — extracted from Gastown.
 
-Orchestration concepts are expressed as data rather than code. The beads daemon is the control plane. Gasboat is a reactive bridge that:
+## Architecture
 
-1. Pushes declarative config to the daemon at startup (`bridge/init.go`) — bead type definitions (`type:agent`, `type:project`, `type:mail`, `type:decision`, `type:advice`), saved views (`view:agents:active`, `view:decisions:pending`, `view:mail:inbox`), and context dashboards (`context:captain`, `context:mate`, `context:deckhand`)
-2. Watches NATS for lifecycle events (`subscriber/`) — filters for `type:agent` beads, maps to spawn/done/kill/stop/update events, translates into K8s pod operations
-3. Handles decisions and mail via NATS watchers (`bridge/decisions.go`, `bridge/mail.go`) — nudges agents via coop when decisions resolve or urgent mail arrives
-4. Posts decisions to Slack/Mobile/etc (`bridge/slack.go`) — interactive notifications for human-in-the-loop responses
-
-Agent-side behavior lives in shell hooks baked into the container image (`images/agent/hooks/`), not in controller Go code. The controller creates pods with the right env vars and lets the hooks do the rest.
-
-When adding new orchestration features, prefer:
-- A new bead type + view in `bridge/init.go` over a new Go package
-- A new agent hook in `images/agent/hooks/` over controller-side logic
-- A NATS subscription in `bridge/` over polling
+- **controller/** — Go module. K8s agent controller that translates bead lifecycle events into pod operations.
+- **controller/internal/bridge/** — Slack notification bridge (decisions watcher, mail watcher, Slack interactions). Zero K8s dependencies.
+- **controller/cmd/controller/** — Controller entry point (single binary).
+- **controller/cmd/slack-bridge/** — Standalone Slack bridge binary.
+- **helm/gasboat/** — Helm chart for all components (controller, coopmux, slack-bridge, PostgreSQL, NATS).
+- **images/** — Dockerfiles for agent pods and slack-bridge.
 
 ## Directory Structure
 
-- `controller/` — Go module, the only compiled artifact
-  - `cmd/controller/` — entry point, leader election, main event loop
-  - `internal/client/` — gRPC client to the beads daemon
-  - `internal/bridge/` — config registration, decision + mail watchers, Slack notifier
-  - `internal/config/` — env var parsing
-  - `internal/podmanager/` — K8s pod CRUD and spec construction
-  - `internal/reconciler/` — periodic desired-vs-actual state sync
-  - `internal/statusreporter/` — pod phase → bead state updates
-  - `internal/subscriber/` — NATS JetStream event listener
-- `images/agent/` — agent container Dockerfile, entrypoint, Claude Code hooks
-- `helm/gasboat/` — Helm chart (controller, beads daemon, NATS, PostgreSQL, coopmux)
-- `deploy/` — example values files
+```
+gasboat/
+├── controller/              # Go module — agent controller + slack bridge
+│   ├── cmd/controller/      # Controller entry point
+│   ├── cmd/slack-bridge/    # Standalone Slack bridge binary
+│   └── internal/
+│       ├── beadsapi/        # HTTP client to beads daemon
+│       ├── bridge/          # Slack notifications (decisions, mail, interactions)
+│       ├── config/          # Env var parsing
+│       ├── podmanager/      # Pod spec construction & CRUD
+│       ├── reconciler/      # Periodic desired-vs-actual sync
+│       ├── statusreporter/  # Pod phase → bead state updates
+│       └── subscriber/      # SSE/NATS event listener
+├── helm/gasboat/            # Helm chart (controller, coopmux, slack-bridge, postgres, nats)
+├── images/
+│   ├── agent/               # Agent pod image + entrypoint
+│   └── slack-bridge/        # Slack bridge Dockerfile
+├── Makefile                 # Top-level build
+└── quench.toml              # Quality checks
+```
+
+## Build
+
+```sh
+cd controller && go build ./cmd/controller/    # controller binary
+cd controller && go build ./cmd/slack-bridge/   # slack bridge binary
+make test                                       # run all tests
+quench check                                    # quality checks
+```
+
+## Key patterns
+
+- **beadsapi client** (`internal/beadsapi/`) — HTTP/JSON client to beads daemon. Used by both controller and bridge.
+- **podmanager** (`internal/podmanager/`) — Pod spec construction and CRUD against K8s API.
+- **reconciler** (`internal/reconciler/`) — Periodic desired-vs-actual sync loop.
+- **subscriber** (`internal/subscriber/`) — SSE/NATS event listener for bead lifecycle events.
+- **bridge** (`internal/bridge/`) — Standalone notification subsystem: NATS subscriptions for decisions/mail beads, Slack HTTP interactions.
+
+## Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BEADS_HTTP_ADDR` | `http://localhost:8080` | Beads daemon HTTP address |
+| `NATS_URL` | `nats://localhost:4222` | NATS server URL |
+| `SLACK_BOAT_TOKEN` | *(optional)* | Slack bot OAuth token |
+| `SLACK_CHANNEL` | *(optional)* | Slack channel for notifications |
 
 ## Commits
 
-Use conventional commit format: `type(scope): description`
-Types: feat, fix, chore, docs, test, refactor
+Use short, imperative subject lines. Scope in parentheses: `fix(bridge): handle nil bead metadata`.
 
-## Build & Test
+## Landing the Plane
 
-```bash
-make build          # compile controller
-make test           # run tests
-make lint           # lint
-make image          # build controller image
-make image-agent    # build agent image
-```
+When finishing work on this codebase:
+
+1. **Build** — `make build` and `make build-bridge` must succeed.
+2. **Run tests** — `make test` must pass.
+3. **Run quench** — `quench check` must pass.
+4. **Helm lint** — `helm lint helm/gasboat/` must pass.
+5. **Follow existing patterns** — bridge code lives in `internal/bridge/`, K8s logic in `internal/podmanager/` and `internal/reconciler/`.

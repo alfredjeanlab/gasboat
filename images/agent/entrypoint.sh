@@ -25,7 +25,7 @@ AGENT="${BOAT_AGENT:-unknown}"
 WORKSPACE="/home/agent/workspace"
 SESSION_RESUME="${BOAT_SESSION_RESUME:-1}"
 
-# Export platform version for bd version commands
+# Export platform version for kd version commands
 if [ -f /etc/platform-version ]; then
     export BEADS_PLATFORM_VERSION
     BEADS_PLATFORM_VERSION=$(cat /etc/platform-version)
@@ -45,12 +45,28 @@ git config --global --add safe.directory '*'
 # ── Git credentials ────────────────────────────────────────────────────
 # If GIT_USERNAME and GIT_TOKEN are set (from ExternalSecret), configure
 # git credential-store so clone/push to github.com works automatically.
+CRED_FILE="${HOME}/.git-credentials"
+CRED_WRITTEN=0
+
 if [ -n "${GIT_USERNAME:-}" ] && [ -n "${GIT_TOKEN:-}" ]; then
-    CRED_FILE="${HOME}/.git-credentials"
     echo "https://${GIT_USERNAME}:${GIT_TOKEN}@github.com" > "${CRED_FILE}"
+    CRED_WRITTEN=1
+    echo "[entrypoint] Git credentials configured for ${GIT_USERNAME}@github.com"
+fi
+
+# Append GitLab credentials if GITLAB_TOKEN is set.
+# Uses GITLAB_USERNAME env var if provided, otherwise defaults to "oauth2" (PAT auth).
+if [ -n "${GITLAB_TOKEN:-}" ]; then
+    GL_USER="${GITLAB_USERNAME:-oauth2}"
+    GL_HOST="${GITLAB_HOST:-gitlab.com}"
+    echo "https://${GL_USER}:${GITLAB_TOKEN}@${GL_HOST}" >> "${CRED_FILE}"
+    CRED_WRITTEN=1
+    echo "[entrypoint] Git credentials configured for ${GL_USER}@${GL_HOST}"
+fi
+
+if [ "${CRED_WRITTEN}" = "1" ]; then
     chmod 600 "${CRED_FILE}"
     git config --global credential.helper "store --file=${CRED_FILE}"
-    echo "[entrypoint] Git credentials configured for ${GIT_USERNAME}@github.com"
 fi
 
 # Initialize git repo in workspace if not already present.
@@ -81,7 +97,7 @@ else
 fi
 
 # ── Daemon connection ────────────────────────────────────────────────────
-# Configure .beads/config.yaml so bd CLI can talk to the remote daemon.
+# Configure .beads/config.yaml so kd CLI can talk to the remote daemon.
 
 if [ -n "${BEADS_DAEMON_HOST:-}" ]; then
     DAEMON_HTTP_PORT="${BEADS_DAEMON_HTTP_PORT:-9080}"
@@ -123,16 +139,38 @@ else
     echo "[entrypoint] Linked ${CLAUDE_DIR} → ${CLAUDE_STATE} (PVC-backed)"
 fi
 
-# Seed credentials from K8s secret mount if PVC doesn't have them yet.
-# IMPORTANT: Don't overwrite PVC credentials on restart — the refresh loop
-# rotates refresh tokens, so the PVC copy is newer than the K8s secret.
+# ── Claude credential provisioning ────────────────────────────────────
+# Priority: (1) PVC credentials (preserved from refresh), (2) K8s secret mount,
+# (3) CLAUDE_CODE_OAUTH_TOKEN env var (coop auto-writes .credentials.json),
+# (4) ANTHROPIC_API_KEY env var (API key mode — no credentials file needed),
+# (5) coopmux distribute endpoint (fetch from centralized credential manager).
 CREDS_STAGING="/tmp/claude-credentials/credentials.json"
 CREDS_PVC="${CLAUDE_STATE}/.credentials.json"
-if [ -f "${CREDS_STAGING}" ] && [ ! -f "${CREDS_PVC}" ]; then
+if [ -f "${CREDS_PVC}" ]; then
+    echo "[entrypoint] Using existing PVC credentials (preserved from refresh)"
+elif [ -f "${CREDS_STAGING}" ]; then
     cp "${CREDS_STAGING}" "${CREDS_PVC}"
     echo "[entrypoint] Seeded Claude credentials from K8s secret"
-elif [ -f "${CREDS_PVC}" ]; then
-    echo "[entrypoint] Using existing PVC credentials (preserved from refresh)"
+elif [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+    echo "[entrypoint] CLAUDE_CODE_OAUTH_TOKEN set — coop will auto-write credentials"
+elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+    echo "[entrypoint] ANTHROPIC_API_KEY set — using API key mode"
+elif [ -n "${COOP_MUX_URL:-}" ]; then
+    # Attempt to fetch credentials from coopmux's distribute endpoint.
+    echo "[entrypoint] No credentials found, requesting from coopmux..."
+    mux_auth="${COOP_MUX_AUTH_TOKEN:-${COOP_BROKER_TOKEN:-}}"
+    mux_creds=$(curl -sf "${COOP_MUX_URL}/api/v1/credentials/distribute" \
+        ${mux_auth:+-H "Authorization: Bearer ${mux_auth}"} \
+        -H 'Content-Type: application/json' \
+        -d "{\"session_id\":\"${HOSTNAME:-$(hostname)}\"}" 2>/dev/null) || true
+    if [ -n "${mux_creds}" ] && echo "${mux_creds}" | jq -e '.claudeAiOauth.accessToken' >/dev/null 2>&1; then
+        echo "${mux_creds}" > "${CREDS_PVC}"
+        echo "[entrypoint] Seeded credentials from coopmux"
+    else
+        echo "[entrypoint] WARNING: No Claude credentials available — agent may not authenticate"
+    fi
+else
+    echo "[entrypoint] WARNING: No Claude credentials available — agent may not authenticate"
 fi
 
 # Set XDG_STATE_HOME so coop writes session artifacts to the PVC.
@@ -145,11 +183,15 @@ if [ -d "/usr/local/go/bin" ]; then
     export PATH="/usr/local/go/bin:${PATH}"
     echo "[entrypoint] Added /usr/local/go/bin to PATH"
 fi
+if [ -d "/usr/local/cargo/bin" ]; then
+    export PATH="/usr/local/cargo/bin:${PATH}"
+    echo "[entrypoint] Added /usr/local/cargo/bin to PATH"
+fi
 
 # ── Claude settings ──────────────────────────────────────────────────────
 #
 # User-level settings (permissions + LSP plugins) written to ~/.claude/settings.json.
-# LSP plugins are always enabled — gopls and rust-analyzer are built into the image.
+# LSP plugins are always enabled — gopls and rust-analyzer are in the omnibus image.
 
 # Start with base settings JSON (permissions + LSP plugins).
 SETTINGS_JSON='{"permissions":{"allow":["Bash(*)","Read(*)","Write(*)","Edit(*)","Glob(*)","Grep(*)","WebFetch(*)","WebSearch(*)"],"deny":[]}}'
@@ -172,23 +214,40 @@ fi
 
 echo "${SETTINGS_JSON}" | jq . > "${CLAUDE_DIR}/settings.json"
 
-# Write project-level settings with hooks.
+# Materialize hooks from config beads (writes workspace .claude/settings.json).
+# Falls back to hardcoded hooks if daemon is unreachable or no config beads exist.
 mkdir -p "${WORKSPACE}/.claude"
-cat > "${WORKSPACE}/.claude/settings.json" <<'HOOKS'
+MATERIALIZED=0
+
+if command -v kd &>/dev/null; then
+    echo "[entrypoint] Materializing hooks from config beads (role: ${ROLE})"
+    if kd setup claude --workspace="${WORKSPACE}" --role="${ROLE}" 2>&1; then
+        if grep -q '"hooks"' "${WORKSPACE}/.claude/settings.json" 2>/dev/null; then
+            MATERIALIZED=1
+            echo "[entrypoint] Hooks materialized from config beads"
+        fi
+    fi
+fi
+
+if [ "${MATERIALIZED}" = "0" ]; then
+    echo "[entrypoint] No config beads found, writing static hooks"
+    cat > "${WORKSPACE}/.claude/settings.json" <<'HOOKS'
 {
   "hooks": {
     "SessionStart": [
       {
         "matcher": "",
         "hooks": [
-          {
-            "type": "command",
-            "command": "/hooks/prime.sh 2>/dev/null || true"
-          },
-          {
-            "type": "command",
-            "command": "/hooks/check-mail.sh 2>/dev/null || true"
-          }
+          {"type": "command", "command": "/hooks/prime.sh 2>/dev/null || true"},
+          {"type": "command", "command": "/hooks/check-mail.sh 2>/dev/null || true"}
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "/hooks/prime.sh 2>/dev/null || true"}
         ]
       }
     ],
@@ -196,10 +255,7 @@ cat > "${WORKSPACE}/.claude/settings.json" <<'HOOKS'
       {
         "matcher": "",
         "hooks": [
-          {
-            "type": "command",
-            "command": "/hooks/check-mail.sh 2>/dev/null || true"
-          }
+          {"type": "command", "command": "/hooks/check-mail.sh 2>/dev/null || true"}
         ]
       }
     ],
@@ -207,10 +263,7 @@ cat > "${WORKSPACE}/.claude/settings.json" <<'HOOKS'
       {
         "matcher": "",
         "hooks": [
-          {
-            "type": "command",
-            "command": "/hooks/drain-queue.sh --quiet 2>/dev/null || true"
-          }
+          {"type": "command", "command": "/hooks/drain-queue.sh --quiet 2>/dev/null || true"}
         ]
       }
     ],
@@ -218,16 +271,14 @@ cat > "${WORKSPACE}/.claude/settings.json" <<'HOOKS'
       {
         "matcher": "",
         "hooks": [
-          {
-            "type": "command",
-            "command": "/hooks/stop-decision.sh 2>/dev/null || true"
-          }
+          {"type": "command", "command": "/hooks/stop-gate.sh"}
         ]
       }
     ]
   }
 }
 HOOKS
+fi
 
 # Write CLAUDE.md with role context if not already present.
 if [ ! -f "${WORKSPACE}/CLAUDE.md" ]; then
@@ -239,9 +290,23 @@ Agent name: ${AGENT}
 
 ## Quick Reference
 
-- \`bd context ${ROLE}\` — See your ${ROLE} dashboard
-- \`bd view mail:inbox\` — Check messages
-- \`bd show <id>\` — View a specific bead
+- \`kd ready\` — See your workflow steps
+- \`kd mail inbox\` — Check messages
+- \`kd show <issue>\` — View specific issue details
+
+## Checkpoint Protocol (Stop Hook)
+
+When you hit a Stop hook block, you MUST create a decision checkpoint:
+
+1. Review what you accomplished
+2. Create a decision:
+   \`\`\`bash
+   kd decision create --no-wait \\
+     --prompt="<what you did and why these options>" \\
+     --options='[{"id":"opt1","short":"Option 1","label":"Full description"}]'
+   \`\`\`
+3. Run \`kd yield\` — blocks until human responds
+4. When \`kd yield\` returns, act on the response
 CLAUDEMD
 fi
 
@@ -256,13 +321,18 @@ All tools are installed directly in the agent image — use them from the comman
 | Tool | Command | Notes |
 |------|---------|-------|
 | Go | `go build`, `go test` | + `gopls` LSP server |
+| Rust | `rustc`, `cargo` | Full toolchain + `rust-analyzer` LSP |
 | Node.js | `node`, `npm`, `npx` | |
-| Python 3 | `python3`, `pip`, `python3 -m venv` | |
-| Rust | `rust-analyzer` | LSP server (no compiler — use `rustup` if needed) |
+| Bun | `bun`, `bunx` | Fast JS runtime + package manager |
+| Python 3 | `python3`, `uv`, `uvx` | `uv` for fast package management |
+| Task | `task` | Taskfile runner |
+| Helm | `helm` | K8s chart management |
+| kubectl | `kubectl` | |
 | AWS CLI | `aws` | |
 | Docker CLI | `docker` | Client only (no daemon) |
-| kubectl | `kubectl` | |
-| git | `git` | HTTPS + SSH protocols |
+| GitHub CLI | `gh` | |
+| GitLab CLI | `glab` | |
+| git | `git`, `git-lfs` | HTTPS + SSH protocols |
 | Build tools | `make`, `gcc`, `g++` | |
 | Utilities | `curl`, `jq`, `unzip`, `ssh` | |
 DEVTOOLS
@@ -371,18 +441,7 @@ inject_initial_prompt() {
         fi
     done
 
-    local nudge_msg
-    if [ "${ROLE}" = "deckhand" ] && [ -z "${BOAT_AGENT_BEAD_ID:-}" ]; then
-        # Deckhand without assigned work — point it to available work.
-        nudge_msg="Run \`bd view ready\` to find available work and begin."
-    elif [ "${ROLE}" = "deckhand" ]; then
-        # Deckhand with assigned work — prime.sh already showed context.
-        nudge_msg="Begin working."
-    else
-        # Mate/captain — prime.sh already showed context, no nudge needed.
-        echo "[entrypoint] Crew agent (${ROLE}), skipping initial nudge"
-        return 0
-    fi
+    local nudge_msg="Check \`kd ready\` for your workflow steps and begin working."
 
     echo "[entrypoint] Injecting initial work prompt (role: ${ROLE})"
     response=$(curl -sf -X POST http://localhost:8080/api/v1/agent/nudge \
@@ -407,6 +466,11 @@ OAUTH_CLIENT_ID="9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 CREDS_FILE="${CLAUDE_STATE}/.credentials.json"
 
 refresh_credentials() {
+    # Skip refresh entirely when using API key mode — no OAuth credentials to refresh.
+    if [ -n "${ANTHROPIC_API_KEY:-}" ] && [ ! -f "${CREDS_FILE}" ]; then
+        echo "[entrypoint] API key mode — skipping OAuth refresh loop"
+        return 0
+    fi
     sleep 30  # Let Claude start first
     local consecutive_failures=0
     local max_failures=5

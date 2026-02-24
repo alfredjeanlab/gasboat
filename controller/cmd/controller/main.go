@@ -12,7 +12,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -39,7 +38,6 @@ func main() {
 
 	logger := setupLogger(cfg.LogLevel)
 	logger.Info("starting gasboat controller",
-		"beads_grpc", cfg.BeadsGRPCAddr,
 		"beads_http", cfg.BeadsHTTPAddr,
 		"namespace", cfg.Namespace)
 
@@ -49,26 +47,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	consumerName := cfg.NatsConsumerName
-	if consumerName == "" {
-		consumerName = "controller-" + cfg.Namespace
-	}
-	// Read auth tokens from K8s secrets.
-	natsToken := readSecretKey(context.Background(), k8sClient, cfg.Namespace, cfg.NatsTokenSecret, "token", logger)
-	watcher := subscriber.NewNATSWatcher(subscriber.Config{
-		NatsURL:       cfg.NatsURL,
-		NatsToken:     natsToken,
-		ConsumerName:  consumerName,
+	watcher := subscriber.NewSSEWatcher(subscriber.SSEConfig{
+		BeadsHTTPAddr: cfg.BeadsHTTPAddr,
+		Topics:        "beads.bead.*",
 		Namespace:     cfg.Namespace,
 		CoopImage:     cfg.CoopImage,
 		BeadsGRPCAddr: cfg.BeadsGRPCAddr,
 	}, logger)
-	logger.Info("using JetStream transport for beads events",
-		"nats_url", cfg.NatsURL, "consumer", consumerName)
+	logger.Info("using SSE transport for beads events",
+		"beads_http", cfg.BeadsHTTPAddr)
 	pods := podmanager.New(k8sClient, logger)
 
-	// Daemon client for gRPC access (used by reconciler, status reporter, and bridge).
-	daemon, err := client.New(client.Config{GRPCAddr: cfg.BeadsGRPCAddr})
+	// Daemon client for HTTP access (used by reconciler, status reporter, and bridge).
+	daemon, err := beadsapi.New(beadsapi.Config{HTTPAddr: cfg.BeadsHTTPAddr})
 	if err != nil {
 		logger.Error("failed to create beads daemon client", "error", err)
 		os.Exit(1)
@@ -87,60 +78,12 @@ func main() {
 
 	rec := reconciler.New(daemon, pods, cfg, logger, BuildSpecFromBeadInfo)
 
-	// Decision watcher: always created, optionally with a Slack notifier.
-	var notifier bridge.Notifier
-	if cfg.SlackBotToken != "" {
-		slack := bridge.NewSlackNotifier(
-			cfg.SlackBotToken,
-			cfg.SlackSigningSecret,
-			cfg.SlackChannel,
-			daemon,
-			logger,
-		)
-		notifier = slack
-
-		// Start HTTP server for Slack interactions.
-		slackAddr := cfg.SlackListenAddr
-		srv := &http.Server{Addr: slackAddr, Handler: slack.Handler()}
-		go func() {
-			logger.Info("starting Slack interaction server", "addr", slackAddr)
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				logger.Error("Slack HTTP server failed", "error", err)
-			}
-		}()
-		logger.Info("Slack notifier enabled", "channel", cfg.SlackChannel)
-	}
-
-	decisions := bridge.NewDecisions(bridge.DecisionsConfig{
-		NatsURL:   cfg.NatsURL,
-		NatsToken: natsToken,
-		Daemon:    daemon,
-		Notifier:  notifier,
-		Logger:    logger,
-	})
+	// Slack notifications, decision watcher, and mail watcher are now handled
+	// by the standalone slack-bridge binary (cmd/slack-bridge). The controller
+	// only handles K8s pod lifecycle operations. See bd-8x8fy.
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
-
-	// Start decision watcher in background.
-	go func() {
-		if err := decisions.Start(ctx); err != nil && ctx.Err() == nil {
-			logger.Error("decisions watcher stopped", "error", err)
-		}
-	}()
-
-	// Start mail watcher in background.
-	mail := bridge.NewMail(bridge.MailConfig{
-		NatsURL:   cfg.NatsURL,
-		NatsToken: natsToken,
-		Daemon:    daemon,
-		Logger:    logger,
-	})
-	go func() {
-		if err := mail.Start(ctx); err != nil && ctx.Err() == nil {
-			logger.Error("mail watcher stopped", "error", err)
-		}
-	}()
 
 	runFn := func(ctx context.Context) {
 		if err := run(ctx, logger, cfg, k8sClient, watcher, pods, status, rec, daemon); err != nil {
@@ -427,25 +370,6 @@ func refreshProjectCache(ctx context.Context, logger *slog.Logger, daemon *clien
 		}
 	}
 	logger.Info("refreshed project cache", "count", len(rigs))
-}
-
-// readSecretKey reads a single key from a K8s Secret. Returns "" if the
-// secret name is empty, the secret doesn't exist, or the key is missing.
-func readSecretKey(ctx context.Context, client kubernetes.Interface, namespace, secretName, key string, logger *slog.Logger) string {
-	if secretName == "" {
-		return ""
-	}
-	secret, err := client.CoreV1().Secrets(namespace).Get(ctx, secretName, metav1.GetOptions{})
-	if err != nil {
-		logger.Warn("failed to read secret", "secret", secretName, "error", err)
-		return ""
-	}
-	val, ok := secret.Data[key]
-	if !ok {
-		logger.Warn("secret missing key", "secret", secretName, "key", key)
-		return ""
-	}
-	return string(val)
 }
 
 func setupLogger(level string) *slog.Logger {

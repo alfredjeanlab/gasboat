@@ -137,7 +137,7 @@ func DefaultPodDefaults(mode string) *PodDefaults {
 		// Crew pods get persistent workspace storage.
 		defaults.WorkspaceStorage = &WorkspaceStorageSpec{
 			Size:             "10Gi",
-			StorageClassName: "", // uses cluster default storage class
+			StorageClassName: "", // set by AGENT_STORAGE_CLASS or project bead
 		}
 	case "job":
 		// Jobs use EmptyDir (no WorkspaceStorage).

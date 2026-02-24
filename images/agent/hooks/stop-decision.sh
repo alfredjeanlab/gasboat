@@ -27,6 +27,6 @@ if [ "$pending" -gt 0 ]; then
 else
   # No decision — block stop, agent must create one first
   echo "You must create a decision bead before stopping. Use:"
-  echo "  bd create --type decision --assign $AGENT_ID --field question='Your question here' --field options='[\"option1\",\"option2\"]'"
+  echo "  kd create --type decision --assign $AGENT_ID --field question='Your question here' --field options='[\"option1\",\"option2\"]'"
   exit 1
 fi

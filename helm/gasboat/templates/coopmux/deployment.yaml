@@ -37,6 +37,44 @@ spec:
       securityContext:
         fsGroup: 1000
       {{- end }}
+      {{- if and .Values.coopmux.claudeApiKeySecret .Values.coopmux.persistence.enabled }}
+      initContainers:
+        - name: seed-credentials
+          image: "{{ .Values.coopmux.image.repository }}:{{ .Values.coopmux.image.tag }}"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              CRED_DIR="{{ dir .Values.coopmux.persistence.path }}"
+              CRED_FILE="${CRED_DIR}/credentials.json"
+              ACCOUNT_NAME="{{ .Values.coopmux.credentials.accountName }}"
+              API_KEY=$(cat /etc/coop-api-key/ANTHROPIC_API_KEY)
+              if [ -z "$API_KEY" ]; then
+                echo "ERROR: API key is empty"
+                exit 1
+              fi
+              # Only seed if no credentials exist yet (preserve refreshed tokens)
+              if [ -f "$CRED_FILE" ]; then
+                echo "Credentials already exist, skipping seed"
+                exit 0
+              fi
+              cat > "$CRED_FILE" <<SEED_EOF
+              {
+                "accounts": {
+                  "${ACCOUNT_NAME}": {
+                    "access_token": "${API_KEY}",
+                    "expires_at": 0
+                  }
+                }
+              }
+              SEED_EOF
+              echo "Seeded credentials for account: ${ACCOUNT_NAME}"
+          volumeMounts:
+            - name: credentials-data
+              mountPath: {{ dir .Values.coopmux.persistence.path }}
+            - name: api-key
+              mountPath: /etc/coop-api-key
+              readOnly: true
+      {{- end }}
       containers:
         - name: coopmux
           image: "{{ .Values.coopmux.image.repository }}:{{ .Values.coopmux.image.tag }}"
@@ -64,10 +102,7 @@ spec:
             - "--nats-token"
             - "$(COOP_MUX_NATS_TOKEN)"
             {{- end }}
-            {{- if .Values.coopmux.apiKeySecret }}
-            - "--api-key-file"
-            - "/etc/coop-api-key/api-key"
-            {{- end }}
+            {{- /* API key is seeded by init container into state dir, not via CLI flag */}}
           env:
             - name: COOP_MUX_AUTH_TOKEN
               valueFrom:
@@ -125,11 +160,6 @@ spec:
             - name: credentials-data
               mountPath: {{ dir .Values.coopmux.persistence.path }}
             {{- end }}
-            {{- if .Values.coopmux.apiKeySecret }}
-            - name: api-key
-              mountPath: /etc/coop-api-key
-              readOnly: true
-            {{- end }}
           resources:
             {{- toYaml .Values.coopmux.resources | nindent 12 }}
       volumes:
@@ -141,10 +171,10 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "gasboat.coopmux.fullname" . }}-credentials
         {{- end }}
-        {{- if .Values.coopmux.apiKeySecret }}
+        {{- if .Values.coopmux.claudeApiKeySecret }}
         - name: api-key
           secret:
-            secretName: {{ .Values.coopmux.apiKeySecret }}
+            secretName: {{ .Values.coopmux.claudeApiKeySecret }}
         {{- end }}
       {{- with .Values.coopmux.nodeSelector }}
       nodeSelector:

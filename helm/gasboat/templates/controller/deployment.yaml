@@ -31,6 +31,44 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
+      {{- if .Values.nats.enabled }}
+      initContainers:
+        - name: nats-stream-init
+          image: natsio/nats-box:0.14.5
+          command:
+            - /bin/sh
+            - -c
+            - |
+              NATS_URL="{{ include "gasboat.natsURL" . }}"
+              # Wait for NATS to be ready (up to 60s)
+              for i in $(seq 1 30); do
+                if nats server check connection -s "$NATS_URL" 2>/dev/null; then break; fi
+                echo "Waiting for NATS... ($i/30)"
+                sleep 2
+              done
+              # Create MUTATION_EVENTS stream (idempotent — exits 0 if already exists)
+              if nats stream info MUTATION_EVENTS -s "$NATS_URL" >/dev/null 2>&1; then
+                echo "MUTATION_EVENTS stream already exists"
+              else
+                nats stream add MUTATION_EVENTS -s "$NATS_URL" \
+                  --subjects "beads.>" \
+                  --retention limits \
+                  --max-age 72h \
+                  --storage file \
+                  --replicas 1 \
+                  --discard old \
+                  --dupe-window 2m \
+                  --defaults
+                echo "Created MUTATION_EVENTS stream"
+              fi
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi
+      {{- end }}
       containers:
         - name: agents
           image: "{{ .Values.agents.image.repository }}:{{ .Values.agents.image.tag }}"
@@ -49,12 +87,20 @@ spec:
             - name: BEADS_GRPC_ADDR
               value: {{ include "gasboat.beads.host" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ include "gasboat.beads.port" . }}
             - name: BEADS_HTTP_ADDR
-              value: {{ include "gasboat.beads.host" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ include "gasboat.beads.httpPort" . }}
+              value: http://{{ include "gasboat.beads.host" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ include "gasboat.beads.httpPort" . }}
             - name: COOP_IMAGE
               value: "{{ .Values.agents.agentImage.repository }}:{{ .Values.agents.agentImage.tag }}"
             {{- if .Values.agents.claudeOAuthSecret }}
             - name: CLAUDE_OAUTH_SECRET
               value: {{ .Values.agents.claudeOAuthSecret }}
+            {{- end }}
+            {{- if .Values.agents.claudeOAuthTokenSecret }}
+            - name: CLAUDE_OAUTH_TOKEN_SECRET
+              value: {{ .Values.agents.claudeOAuthTokenSecret }}
+            {{- end }}
+            {{- if .Values.agents.anthropicApiKeySecret }}
+            - name: ANTHROPIC_API_KEY_SECRET
+              value: {{ .Values.agents.anthropicApiKeySecret }}
             {{- end }}
             - name: BEADS_TOKEN_SECRET
               value: {{ include "gasboat.beads.tokenSecretName" . }}
@@ -83,6 +129,10 @@ spec:
             {{- end }}
             - name: COOP_SERVICE_ACCOUNT
               value: {{ include "gasboat.coop.serviceAccountName" . }}
+            {{- if .Values.agents.agentStorageClass }}
+            - name: AGENT_STORAGE_CLASS
+              value: {{ .Values.agents.agentStorageClass }}
+            {{- end }}
             {{- if .Values.agents.coopMaxPods }}
             - name: COOP_MAX_PODS
               value: {{ .Values.agents.coopMaxPods | quote }}
@@ -95,6 +145,10 @@ spec:
             - name: GITHUB_TOKEN_SECRET
               value: {{ .Values.agents.githubTokenSecret }}
             {{- end }}
+            {{- if .Values.agents.gitlabTokenSecret }}
+            - name: GITLAB_TOKEN_SECRET
+              value: {{ .Values.agents.gitlabTokenSecret }}
+            {{- end }}
             {{- if .Values.agents.logLevel }}
             - name: LOG_LEVEL
               value: {{ .Values.agents.logLevel }}
@@ -103,22 +157,7 @@ spec:
             - name: COOP_SYNC_INTERVAL
               value: {{ .Values.agents.coopSyncInterval | quote }}
             {{- end }}
-            {{- if .Values.agents.slack.botToken }}
-            - name: SLACK_BOAT_TOKEN
-              value: {{ .Values.agents.slack.botToken }}
-            {{- end }}
-            {{- if .Values.agents.slack.signingSecret }}
-            - name: SLACK_SIGNING_SECRET
-              value: {{ .Values.agents.slack.signingSecret }}
-            {{- end }}
-            {{- if .Values.agents.slack.channel }}
-            - name: SLACK_CHANNEL
-              value: {{ .Values.agents.slack.channel }}
-            {{- end }}
-            {{- if .Values.agents.slack.listenAddr }}
-            - name: SLACK_LISTEN_ADDR
-              value: {{ .Values.agents.slack.listenAddr }}
-            {{- end }}
+            # Slack env vars removed — now handled by slack-bridge container (bd-8x8fy).
           resources:
             {{- toYaml .Values.agents.resources | nindent 12 }}
       {{- with .Values.agents.nodeSelector }}

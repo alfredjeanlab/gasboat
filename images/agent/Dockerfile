@@ -1,8 +1,8 @@
 # Gasboat agent images (multi-stage).
 #
 # Targets:
-#   slim     — minimal: git, Node.js, Claude Code, coop, bd, hooks
-#   omnibus  — slim + Go, Python, Rust Analyzer, kubectl, AWS/Docker/GitHub/GitLab CLIs
+#   slim     — minimal: git, Node.js, Claude Code, coop, kd, hooks
+#   omnibus  — slim + Go, Rust, uv, bun, kubectl, Helm, Task, AWS/Docker/GitHub/GitLab CLIs
 #
 # Build:
 #   docker build --target slim    -t gasboat-agent:slim    images/agent/
@@ -11,15 +11,17 @@
 FROM ubuntu:24.04 AS slim
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG NODE_VERSION=22
-ARG COOP_VERSION=v1.0.0
-ARG BEADS_VERSION=v0.1.0
+ARG NODE_VERSION=24
+ARG COOP_VERSION=2026.221.0
+ARG BEADS_VERSION=v0.3.1
 ARG TARGETARCH
 
 # ── System packages (minimal) ─────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl git jq xz-utils ca-certificates screen \
-    openssh-client sudo && \
+    curl git git-lfs jq xz-utils ca-certificates screen \
+    openssh-client sudo \
+    python3 python3-pip python3-venv && \
+    ln -sf /usr/bin/python3 /usr/bin/python && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ── Node.js ──────────────────────────────────────────────────────
@@ -36,20 +38,20 @@ RUN npm install -g @anthropic-ai/claude-code
 # ── Coop (terminal session manager) ─────────────────────────────
 RUN set -e && \
     if [ -z "${COOP_VERSION}" ]; then \
-      COOP_VERSION=$(curl -fsSL "https://api.github.com/repos/alfredjeanlab/coop/releases/latest" | jq -r .tag_name); \
+      COOP_VERSION=$(curl -fsSL "https://api.github.com/repos/groblegark/coop/releases/latest" | jq -r .tag_name); \
     fi && \
-    case "${TARGETARCH}" in arm64) COOP_ARCH=aarch64 ;; *) COOP_ARCH=x86_64 ;; esac && \
-    curl -fsSL "https://github.com/alfredjeanlab/coop/releases/download/${COOP_VERSION}/coop-linux-${COOP_ARCH}.tar.gz" \
+    case "${TARGETARCH}" in arm64) COOP_ARCH=arm64 ;; *) COOP_ARCH=amd64 ;; esac && \
+    curl -fsSL "https://github.com/groblegark/coop/releases/download/${COOP_VERSION}/coop-linux-${COOP_ARCH}.tar.gz" \
       | tar -xz -C /usr/local/bin coop
 
-# ── Beads CLI (bd) ──────────────────────────────────────────────
+# ── Beads CLI (kd) ──────────────────────────────────────────────
 RUN set -e && \
     if [ -z "${BEADS_VERSION}" ]; then \
-      BEADS_VERSION=$(curl -fsSL "https://api.github.com/repos/alfredjeanlab/beads/releases/latest" | jq -r .tag_name); \
+      BEADS_VERSION=$(curl -fsSL "https://api.github.com/repos/groblegark/kbeads/releases/latest" | jq -r .tag_name); \
     fi && \
     case "${TARGETARCH}" in arm64) BD_ARCH=aarch64 ;; *) BD_ARCH=x86_64 ;; esac && \
-    curl -fsSL "https://github.com/alfredjeanlab/beads/releases/download/${BEADS_VERSION}/bd-linux-${BD_ARCH}.tar.gz" \
-      | tar -xz -C /usr/local/bin bd
+    curl -fsSL "https://github.com/groblegark/kbeads/releases/download/${BEADS_VERSION}/kd-linux-${BD_ARCH}.tar.gz" \
+      | tar -xz -C /usr/local/bin kd
 
 # ── Agent user ───────────────────────────────────────────────────
 RUN sed -i 's/^ubuntu:/agent:/' /etc/passwd && \
@@ -105,11 +107,13 @@ RUN GO_LATEST=$(curl -fsSL "https://go.dev/dl/?mode=json" \
     rm -rf /tmp/go
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# ── Rust Analyzer (LSP server only, no compiler) ─────────────────
-RUN case "${TARGETARCH}" in arm64) RUST_TRIPLE=aarch64-unknown-linux-gnu ;; *) RUST_TRIPLE=x86_64-unknown-linux-gnu ;; esac && \
-    curl -fsSL "https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-${RUST_TRIPLE}.gz" \
-      | gunzip > /usr/local/bin/rust-analyzer && \
-    chmod +x /usr/local/bin/rust-analyzer
+# ── Rust toolchain (compiler + cargo + rust-analyzer) ───────────
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
+ENV PATH="${CARGO_HOME}/bin:${PATH}"
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --default-toolchain stable --profile default \
+          --component rust-analyzer && \
+    chmod -R a+rw ${RUSTUP_HOME} ${CARGO_HOME}
 
 # ── kubectl ──────────────────────────────────────────────────────
 RUN KUBECTL_VERSION=$(curl -fsSL https://dl.k8s.io/release/stable.txt) && \
@@ -142,5 +146,32 @@ RUN case "${TARGETARCH}" in arm64) AWS_ARCH=aarch64 ;; *) AWS_ARCH=x86_64 ;; esa
     AWSVER=$(ls /opt/aws-cli/v2/ | grep -v current | head -1) && \
     ln -sfn "/opt/aws-cli/v2/${AWSVER}" /opt/aws-cli/v2/current && \
     rm -rf /tmp/awscli.zip /tmp/aws
+
+# ── Claudeless (Claude CLI simulator for E2E testing) ────────────
+RUN CLAUDELESS_VERSION=$(curl -fsSL "https://api.github.com/repos/alfredjeanlab/claudeless/releases/latest" | jq -r .tag_name) && \
+    case "${TARGETARCH}" in arm64) CL_ARCH=aarch64 ;; *) CL_ARCH=x86_64 ;; esac && \
+    curl -fsSL "https://github.com/alfredjeanlab/claudeless/releases/download/${CLAUDELESS_VERSION}/claudeless-linux-${CL_ARCH}.tar.gz" \
+      | tar -xz -C /usr/local/bin claudeless && \
+    chmod +x /usr/local/bin claudeless
+
+# ── uv (Python package manager) ───────────────────────────────
+RUN curl -LsSf https://astral.sh/uv/install.sh | env INSTALLER_NO_MODIFY_PATH=1 sh && \
+    mv /root/.local/bin/uv /usr/local/bin/uv && \
+    mv /root/.local/bin/uvx /usr/local/bin/uvx
+
+# ── Bun ────────────────────────────────────────────────────────
+ENV BUN_INSTALL=/usr/local/bun
+RUN curl -fsSL https://bun.sh/install | bash && \
+    ln -sf ${BUN_INSTALL}/bin/bun /usr/local/bin/bun && \
+    ln -sf ${BUN_INSTALL}/bin/bunx /usr/local/bin/bunx
+ENV PATH="${BUN_INSTALL}/bin:${PATH}"
+
+# ── Task CLI (Taskfile runner) ─────────────────────────────────
+RUN GOPATH=/tmp/go /usr/local/go/bin/go install github.com/go-task/task/v3/cmd/task@latest && \
+    mv /tmp/go/bin/task /usr/local/bin/task && \
+    rm -rf /tmp/go
+
+# ── Helm ───────────────────────────────────────────────────────
+RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
 USER 1000

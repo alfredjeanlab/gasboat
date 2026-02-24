@@ -175,15 +175,68 @@ func (s *SlackNotifier) UpdateDecision(ctx context.Context, beadID, chosen strin
 	return nil
 }
 
+// NotifyEscalation posts a highlighted notification for an escalated decision.
+func (s *SlackNotifier) NotifyEscalation(ctx context.Context, bead BeadEvent) error {
+	question := bead.Fields["question"]
+	text := fmt.Sprintf(":rotating_light: ESCALATED: %s — %s", bead.ID, question)
+
+	blocks := []map[string]interface{}{
+		{
+			"type": "section",
+			"text": map[string]string{
+				"type": "mrkdwn",
+				"text": fmt.Sprintf(":rotating_light: *ESCALATED: %s*\n%s", bead.ID, question),
+			},
+		},
+	}
+
+	payload := map[string]interface{}{
+		"channel": s.channel,
+		"text":    text,
+		"blocks":  blocks,
+	}
+
+	_, err := s.postSlackMessage(ctx, payload)
+	return err
+}
+
+// DismissDecision updates the Slack message for an expired/dismissed decision.
+func (s *SlackNotifier) DismissDecision(_ context.Context, beadID string) error {
+	s.mu.Lock()
+	ts, ok := s.messages[beadID]
+	delete(s.messages, beadID)
+	s.mu.Unlock()
+
+	if !ok {
+		return nil
+	}
+
+	payload := map[string]interface{}{
+		"channel": s.channel,
+		"ts":      ts,
+		"text":    "Decision expired",
+		"blocks": []map[string]interface{}{
+			{
+				"type": "section",
+				"text": map[string]string{
+					"type": "mrkdwn",
+					"text": fmt.Sprintf("~Decision needed~ — *Expired* (`%s`)", beadID),
+				},
+			},
+		},
+	}
+	return s.updateSlackMessage(context.Background(), payload)
+}
+
 // Handler returns an http.Handler for Slack interaction webhooks.
 func (s *SlackNotifier) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/slack/interactions", s.handleInteraction)
+	mux.HandleFunc("/slack/interactions", s.HandleInteraction)
 	return mux
 }
 
-// handleInteraction processes Slack interactive payloads (button clicks and dialog submissions).
-func (s *SlackNotifier) handleInteraction(w http.ResponseWriter, r *http.Request) {
+// HandleInteraction processes Slack interactive payloads (button clicks and dialog submissions).
+func (s *SlackNotifier) HandleInteraction(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

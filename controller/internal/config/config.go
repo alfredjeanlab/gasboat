@@ -31,19 +31,15 @@ type Config struct {
 	// and passes the secret name to agent pods for secretKeyRef injection.
 	BeadsTokenSecret string
 
-	// --- NATS Event Bus ---
+	// --- NATS (passed to agent pods only, controller uses SSE) ---
 
 	// NatsURL is the NATS server URL for event bus (env: NATS_URL).
-	// Passed to agent pods as COOP_NATS_URL for real-time events.
+	// Passed to agent pods as BEADS_NATS_URL and COOP_NATS_URL.
 	NatsURL string
 
 	// NatsTokenSecret is the K8s secret containing the NATS auth token (env: NATS_TOKEN_SECRET).
 	// Injected as COOP_NATS_TOKEN in agent pods.
 	NatsTokenSecret string
-
-	// NatsConsumerName is the durable consumer name for JetStream (env: NATS_CONSUMER_NAME).
-	// Default: "controller-<namespace>".
-	NatsConsumerName string
 
 	// --- Agent Pods ---
 
@@ -68,11 +64,27 @@ type Config struct {
 	// Default: 60s.
 	CoopSyncInterval time.Duration
 
+	// AgentStorageClass is the default StorageClass for agent workspace PVCs
+	// (env: AGENT_STORAGE_CLASS). When set, crew-mode pods use this unless
+	// overridden by a project bead's storage_class label.
+	AgentStorageClass string
+
 	// --- Secrets & Credentials ---
 
 	// ClaudeOAuthSecret is the K8s secret containing Claude OAuth credentials (env: CLAUDE_OAUTH_SECRET).
 	// Mounted as ~/.claude/.credentials.json in agent pods for Max/Corp accounts.
 	ClaudeOAuthSecret string
+
+	// ClaudeOAuthTokenSecret is the K8s secret containing a Claude OAuth access token
+	// (env: CLAUDE_OAUTH_TOKEN_SECRET). The "token" key is injected as
+	// CLAUDE_CODE_OAUTH_TOKEN in agent pods. When set, coop auto-writes
+	// .credentials.json — preferred over the static credentials secret mount.
+	ClaudeOAuthTokenSecret string
+
+	// AnthropicApiKeySecret is the K8s secret containing an Anthropic API key
+	// (env: ANTHROPIC_API_KEY_SECRET). The "key" key is injected as
+	// ANTHROPIC_API_KEY in agent pods. Fallback when OAuth is unavailable.
+	AnthropicApiKeySecret string
 
 	// GitCredentialsSecret is the K8s secret containing git credentials (env: GIT_CREDENTIALS_SECRET).
 	// Keys "username" and "token" are injected as GIT_USERNAME and GIT_TOKEN env vars
@@ -82,6 +94,10 @@ type Config struct {
 	// GithubTokenSecret is the K8s secret containing a GitHub token (env: GITHUB_TOKEN_SECRET).
 	// Injected as GITHUB_TOKEN in agent pods for gh CLI operations (releases, GHCR push).
 	GithubTokenSecret string
+
+	// GitlabTokenSecret is the K8s secret containing a GitLab token (env: GITLAB_TOKEN_SECRET).
+	// Injected as GITLAB_TOKEN in agent pods for glab CLI operations and git clone/push.
+	GitlabTokenSecret string
 
 	// --- Coopmux ---
 
@@ -110,24 +126,8 @@ type Config struct {
 	// Default: hostname.
 	LeaderElectionIdentity string
 
-	// --- Slack Notifications ---
-
-	// SlackBotToken is the Slack bot OAuth token (env: SLACK_BOAT_TOKEN).
-	// NOTE: The env var is SLACK_BOAT_TOKEN (not SLACK_BOT_TOKEN) — a deliberate
-	// "gasboat" pun that has been baked into deploy configs.
-	// When set, enables Slack notifications for decision beads.
-	SlackBotToken string
-
-	// SlackSigningSecret is the Slack app signing secret (env: SLACK_SIGNING_SECRET).
-	// Used to verify inbound Slack interaction payloads.
-	SlackSigningSecret string
-
-	// SlackChannel is the Slack channel ID to post decision notifications (env: SLACK_CHANNEL).
-	SlackChannel string
-
-	// SlackListenAddr is the HTTP listen address for Slack interactions (env: SLACK_LISTEN_ADDR).
-	// Default: ":8090".
-	SlackListenAddr string
+	// Slack notifications are now handled by the standalone slack-bridge
+	// binary (cmd/slack-bridge). Slack config fields removed — see bd-8x8fy.
 
 	// --- Controller ---
 
@@ -143,8 +143,8 @@ type Config struct {
 
 // ProjectCacheEntry holds project metadata from daemon project beads.
 type ProjectCacheEntry struct {
-	Prefix        string // e.g., "bd", "bot"
-	GitURL        string // e.g., "https://github.com/alfredjeanlab/beads.git"
+	Prefix        string // e.g., "kd", "bot"
+	GitURL        string // e.g., "https://github.com/groblegark/kbeads.git"
 	DefaultBranch string // e.g., "main"
 
 	// Per-project pod customization (from project bead labels).
@@ -164,10 +164,9 @@ func Parse() *Config {
 		BeadsHTTPAddr:    envOr("BEADS_HTTP_ADDR", "localhost:8080"),
 		BeadsTokenSecret: os.Getenv("BEADS_TOKEN_SECRET"),
 
-		// NATS Event Bus
-		NatsURL:          os.Getenv("NATS_URL"),
-		NatsTokenSecret:  os.Getenv("NATS_TOKEN_SECRET"),
-		NatsConsumerName: os.Getenv("NATS_CONSUMER_NAME"),
+		// NATS Event Bus (passed to agent pods, not used by the controller itself)
+		NatsURL:         os.Getenv("NATS_URL"),
+		NatsTokenSecret: os.Getenv("NATS_TOKEN_SECRET"),
 
 		// Agent Pods
 		CoopImage:          os.Getenv("COOP_IMAGE"),
@@ -175,11 +174,15 @@ func Parse() *Config {
 		CoopMaxPods:        envIntOr("COOP_MAX_PODS", 0),
 		CoopBurstLimit:     envIntOr("COOP_BURST_LIMIT", 3),
 		CoopSyncInterval:   envDurationOr("COOP_SYNC_INTERVAL", 60*time.Second),
+		AgentStorageClass:  os.Getenv("AGENT_STORAGE_CLASS"),
 
 		// Secrets & Credentials
-		ClaudeOAuthSecret:    os.Getenv("CLAUDE_OAUTH_SECRET"),
-		GitCredentialsSecret: os.Getenv("GIT_CREDENTIALS_SECRET"),
-		GithubTokenSecret:    os.Getenv("GITHUB_TOKEN_SECRET"),
+		ClaudeOAuthSecret:      os.Getenv("CLAUDE_OAUTH_SECRET"),
+		ClaudeOAuthTokenSecret: os.Getenv("CLAUDE_OAUTH_TOKEN_SECRET"),
+		AnthropicApiKeySecret:  os.Getenv("ANTHROPIC_API_KEY_SECRET"),
+		GitCredentialsSecret:   os.Getenv("GIT_CREDENTIALS_SECRET"),
+		GithubTokenSecret:      os.Getenv("GITHUB_TOKEN_SECRET"),
+		GitlabTokenSecret:      os.Getenv("GITLAB_TOKEN_SECRET"),
 
 		// Coopmux
 		CoopmuxURL:         os.Getenv("COOPMUX_URL"),
@@ -190,11 +193,7 @@ func Parse() *Config {
 		LeaderElectionID:       envOr("LEADER_ELECTION_ID", "agents-leader"),
 		LeaderElectionIdentity: envOr("POD_NAME", hostname()),
 
-		// Slack Notifications
-		SlackBotToken:      os.Getenv("SLACK_BOAT_TOKEN"),
-		SlackSigningSecret: os.Getenv("SLACK_SIGNING_SECRET"),
-		SlackChannel:       os.Getenv("SLACK_CHANNEL"),
-		SlackListenAddr:    envOr("SLACK_LISTEN_ADDR", ":8090"),
+		// Slack config removed — handled by standalone slack-bridge (bd-8x8fy).
 
 		// Controller
 		LogLevel: envOr("LOG_LEVEL", "info"),

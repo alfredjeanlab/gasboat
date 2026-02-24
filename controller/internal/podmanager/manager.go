@@ -430,8 +430,11 @@ func (m *K8sManager) buildEnvVars(spec AgentPodSpec) []corev1.EnvVar {
 	// All agents get BEADS_ACTOR, GIT_AUTHOR_NAME, BEADS_AGENT_NAME, and
 	// BOAT_AGENT_BEAD_ID (the agent's own bead, used by prime.sh to look up
 	// hook_bead and instructions without a list+filter round-trip).
+	// KD_AGENT_ID and KD_ACTOR are used by `kd bus emit` for gate identity.
 	envVars = append(envVars,
 		corev1.EnvVar{Name: "BEADS_ACTOR", Value: spec.AgentName},
+		corev1.EnvVar{Name: "KD_ACTOR", Value: spec.AgentName},
+		corev1.EnvVar{Name: "KD_AGENT_ID", Value: spec.BeadID},
 		corev1.EnvVar{Name: "GIT_AUTHOR_NAME", Value: spec.AgentName},
 		corev1.EnvVar{Name: "BEADS_AGENT_NAME", Value: fmt.Sprintf("%s/%s", spec.Project, spec.AgentName)},
 		corev1.EnvVar{Name: "BOAT_AGENT_BEAD_ID", Value: spec.BeadID},

@@ -6,6 +6,7 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [main]
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -59,10 +60,28 @@ jobs:
             echo "alias=nightly" >> "$GITHUB_OUTPUT"
           fi
 
+  quench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: controller/go.mod
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Install quench
+        run: cargo install quench --git https://github.com/alfredjeanlab/quench
+      - name: Run quench checks
+        run: quench check
+
   docker:
     name: Docker (${{ matrix.arch }})
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
-    needs: [test, lint, version]
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    needs: [test]
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -101,8 +120,8 @@ jobs:
 
   manifest:
     name: Manifest
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
-    needs: [docker, version]
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    needs: [docker]
     runs-on: ubuntu-latest
     steps:
       - uses: docker/login-action@v3
@@ -126,10 +145,90 @@ jobs:
             echo "::endgroup::"
           done
 
+  slack-bridge:
+    name: Slack Bridge (${{ matrix.arch }})
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    needs: [test]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/slack-bridge
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},suffix=-${{ matrix.arch }}
+            type=semver,pattern={{major}}.{{minor}},suffix=-${{ matrix.arch }}
+            type=raw,value=nightly-${{ matrix.arch }},enable={{is_default_branch}}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/slack-bridge/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=slack-bridge-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=slack-bridge-${{ matrix.arch }}
+
+  slack-bridge-manifest:
+    name: Slack Bridge Manifest
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    needs: [slack-bridge]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/slack-bridge
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=nightly,enable={{is_default_branch}}
+      - name: Create multi-arch manifests
+        run: |
+          while IFS= read -r TAG; do
+            [ -z "$TAG" ] && continue
+            echo "::group::$TAG"
+            docker buildx imagetools create \
+              -t "$TAG" \
+              "${TAG}-amd64" \
+              "${TAG}-arm64"
+            echo "::endgroup::"
+          done <<< "${{ steps.meta.outputs.tags }}"
+
   agent:
     name: Agent (${{ matrix.target }}/${{ matrix.arch }})
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
-    needs: [version]
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -167,8 +266,8 @@ jobs:
 
   agent-manifest:
     name: Agent manifest (${{ matrix.target }})
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
-    needs: [agent, version]
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    needs: [agent]
     runs-on: ubuntu-latest
     strategy:
       matrix:
