@@ -94,10 +94,11 @@ func hookEntry(command string) map[string]any {
 func defaultHookSettings() map[string]any {
 	return map[string]any{
 		"hooks": map[string]any{
-			// SessionStart: prime context + check mail.
+			// SessionStart: prime context + check mail + audit worktrees.
 			"SessionStart": []any{
 				hookEntry("gb hook prime 2>/dev/null || true"),
 				hookEntry("gb hook check-mail 2>/dev/null || true"),
+				hookEntry("gb workspace audit 2>/dev/null || true"),
 			},
 			// PreCompact: re-prime so context survives compaction.
 			"PreCompact": []any{

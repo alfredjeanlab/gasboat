@@ -104,6 +104,7 @@ func init() {
 
 	// Session Control
 	rootCmd.AddCommand(setupCmd)
+	rootCmd.AddCommand(workspaceCmd)
 	rootCmd.AddCommand(yieldCmd)
 	rootCmd.AddCommand(readyCmd)
 	rootCmd.AddCommand(primeCmd)

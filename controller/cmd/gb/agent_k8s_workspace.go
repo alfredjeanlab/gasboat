@@ -241,6 +241,10 @@ func runGitIn(dir string, args ...string) error {
 	return cmd.Run()
 }
 
+// resetStaleBranch resets the main workspace to main/master if it is on a
+// stale feature branch — but only when no per-bead worktrees are present.
+// When worktrees exist the main repo acts as a coordinator and should not be
+// reset: agents work inside individual worktrees under .beads/worktrees/.
 func resetStaleBranch(workspace string) {
 	out, err := exec.Command("git", "-C", workspace, "branch", "--show-current").Output()
 	if err != nil {
@@ -250,6 +254,16 @@ func resetStaleBranch(workspace string) {
 	if branch == "" || branch == "main" || branch == "master" {
 		return
 	}
+
+	// If per-bead worktrees exist, warn but do not destroy the main repo state.
+	// Agents working in worktrees manage their own branches independently.
+	wtDir := filepath.Join(workspace, ".beads", "worktrees")
+	if entries, err := os.ReadDir(wtDir); err == nil && len(entries) > 0 {
+		fmt.Printf("[gb agent start] workspace on branch '%s' with %d active worktree(s) — skipping reset\n",
+			branch, len(entries))
+		return
+	}
+
 	fmt.Printf("[gb agent start] WARNING: workspace on stale branch '%s', resetting to main\n", branch)
 	_ = runGitIn(workspace, "checkout", "--", ".")
 	_ = runGitIn(workspace, "clean", "-fd")

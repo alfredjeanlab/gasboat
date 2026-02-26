@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -140,10 +141,34 @@ var hookStopGateCmd = &cobra.Command{
 	},
 }
 
+// ── gb hook workspace-check ───────────────────────────────────────────────
+
+var hookWorkspaceCheckCmd = &cobra.Command{
+	Use:   "workspace-check",
+	Short: "Warn if working directory is not inside a per-bead worktree",
+	Long: `Checks whether the agent's current working directory is inside a
+per-bead worktree (under .beads/worktrees/<bead-id>/). If not, emits a
+system-reminder so the agent knows to run 'gb workspace setup <bead-id>'.
+
+Exits 0 always — non-blocking by design.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cwd, _ := os.Getwd()
+		// Check if cwd is inside .beads/worktrees/.
+		if strings.Contains(filepath.ToSlash(cwd), "/.beads/worktrees/") {
+			return nil
+		}
+		// Not in a worktree — emit a reminder.
+		fmt.Printf("<system-reminder>[workspace] Working directory is not a per-bead worktree.\n" +
+			"Run 'gb workspace setup <bead-id>' to create an isolated worktree before making changes.</system-reminder>\n")
+		return nil
+	},
+}
+
 func init() {
 	hookCmd.AddCommand(hookCheckMailCmd)
 	hookCmd.AddCommand(hookPrimeCmd)
 	hookCmd.AddCommand(hookStopGateCmd)
+	hookCmd.AddCommand(hookWorkspaceCheckCmd)
 }
 
 // emitHookWithRetry calls daemon.EmitHook with increasing backoff on transient
