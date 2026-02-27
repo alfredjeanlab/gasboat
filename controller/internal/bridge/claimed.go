@@ -140,6 +140,61 @@ func (c *Claimed) handleClosed(ctx context.Context, data []byte) {
 	c.nudgeAgent(ctx, *bead, message)
 }
 
+func (c *Claimed) handleClosed(ctx context.Context, data []byte) {
+	bead := ParseBeadEvent(data)
+	if bead == nil {
+		c.logger.Debug("skipping malformed bead closed event")
+		return
+	}
+
+	// Only nudge for claimed beads (assignee present).
+	if bead.Assignee == "" {
+		return
+	}
+
+	// Skip infrastructure/system bead types.
+	if skipClaimedTypes[bead.Type] {
+		return
+	}
+
+	// Rate-limit: skip if we nudged for this bead recently.
+	if !c.shouldNudge(bead.ID) {
+		return
+	}
+
+	c.logger.Info("claimed bead closed, nudging assignee to checkpoint",
+		"id", bead.ID,
+		"title", bead.Title,
+		"assignee", bead.Assignee,
+		"type", bead.Type)
+
+	message := fmt.Sprintf("Your claimed bead %s %q was closed — work is complete, create a decision checkpoint now",
+		bead.ID, bead.Title)
+
+	agentBead, err := c.daemon.FindAgentBead(ctx, bead.Assignee)
+	if err != nil {
+		c.logger.Error("failed to get agent bead for claimed-close nudge",
+			"agent", bead.Assignee, "bead", bead.ID, "error", err)
+		return
+	}
+
+	coopURL := beadsapi.ParseNotes(agentBead.Notes)["coop_url"]
+	if coopURL == "" {
+		c.logger.Warn("agent bead has no coop_url, cannot nudge",
+			"agent", bead.Assignee, "bead", bead.ID)
+		return
+	}
+
+	if err := nudgeCoop(ctx, c.httpClient, coopURL, message); err != nil {
+		c.logger.Error("failed to nudge agent for claimed bead close",
+			"agent", bead.Assignee, "coop_url", coopURL, "error", err)
+		return
+	}
+
+	c.logger.Info("nudged agent for claimed bead close",
+		"agent", bead.Assignee, "bead", bead.ID)
+}
+
 // shouldNudge returns true if a nudge should be sent for the given bead ID.
 // Enforces a rate limit of one nudge per bead per claimedNudgeTTL window.
 // Cleans up expired entries on each call.
