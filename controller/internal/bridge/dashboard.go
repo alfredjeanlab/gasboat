@@ -168,26 +168,37 @@ func (d *Dashboard) renderBlocks(agents []beadsapi.AgentBead, decisions []*beads
 		cfg.MaxDecisionsShown = 5
 	}
 
-	// Classify agents.
-	var working, idle, dead []beadsapi.AgentBead
+	// Build a pending-decision count per agent bead ID.
+	pendingByAgent := make(map[string]int, len(decisions))
+	for _, dec := range decisions {
+		if agentID := dec.Fields["requesting_agent_bead_id"]; agentID != "" {
+			pendingByAgent[agentID]++
+		}
+	}
+
+	// Classify agents into four buckets.
+	var working, starting, idle, dead []beadsapi.AgentBead
 	for _, a := range agents {
 		switch {
 		case a.AgentState == "failed" || a.PodPhase == "failed":
 			dead = append(dead, a)
 		case a.AgentState == "working":
 			working = append(working, a)
+		case a.AgentState == "spawning":
+			starting = append(starting, a)
 		default:
 			idle = append(idle, a)
 		}
 	}
 
-	// Sort: working by project/name, idle by name, dead by name.
+	// Sort: working by project/name, others by name.
 	sort.Slice(working, func(i, j int) bool {
 		if working[i].Project != working[j].Project {
 			return working[i].Project < working[j].Project
 		}
 		return working[i].AgentName < working[j].AgentName
 	})
+	sort.Slice(starting, func(i, j int) bool { return starting[i].AgentName < starting[j].AgentName })
 	sort.Slice(idle, func(i, j int) bool { return idle[i].AgentName < idle[j].AgentName })
 	sort.Slice(dead, func(i, j int) bool { return dead[i].AgentName < dead[j].AgentName })
 
@@ -202,8 +213,11 @@ func (d *Dashboard) renderBlocks(agents []beadsapi.AgentBead, decisions []*beads
 	// Summary counters.
 	summaryText := fmt.Sprintf(":large_green_circle: %d working  ·  :white_circle: %d idle  ·  :red_circle: %d dead",
 		len(working), len(idle), len(dead))
+	if len(starting) > 0 {
+		summaryText += fmt.Sprintf("  ·  :hourglass_flowing_sand: %d starting", len(starting))
+	}
 	if len(decisions) > 0 {
-		summaryText += fmt.Sprintf("  ·  :clipboard: %d pending decisions", len(decisions))
+		summaryText += fmt.Sprintf("  ·  :large_blue_circle: %d pending decisions", len(decisions))
 	}
 	blocks = append(blocks, slack.NewContextBlock("",
 		slack.NewTextBlockObject("mrkdwn", summaryText, false, false)))
@@ -228,6 +242,26 @@ func (d *Dashboard) renderBlocks(agents []beadsapi.AgentBead, decisions []*beads
 		}
 	}
 
+	// Starting section.
+	if len(starting) > 0 {
+		blocks = append(blocks, slack.NewDividerBlock())
+		blocks = append(blocks, slack.NewContextBlock("",
+			slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*Starting (%d)*", len(starting)), false, false)))
+
+		shown := starting
+		if len(shown) > cfg.MaxIdleShown {
+			shown = shown[:cfg.MaxIdleShown]
+		}
+		for _, a := range shown {
+			blocks = append(blocks, dashboardAgentStartingBlock(a))
+		}
+		if overflow := len(starting) - cfg.MaxIdleShown; overflow > 0 {
+			blocks = append(blocks, slack.NewContextBlock("",
+				slack.NewTextBlockObject("mrkdwn",
+					fmt.Sprintf("_+%d more starting agents_", overflow), false, false)))
+		}
+	}
+
 	// Idle section.
 	if len(idle) > 0 {
 		blocks = append(blocks, slack.NewDividerBlock())
@@ -239,7 +273,7 @@ func (d *Dashboard) renderBlocks(agents []beadsapi.AgentBead, decisions []*beads
 			shown = shown[:cfg.MaxIdleShown]
 		}
 		for _, a := range shown {
-			blocks = append(blocks, dashboardAgentIdleBlock(a))
+			blocks = append(blocks, dashboardAgentIdleBlock(a, pendingByAgent[a.ID]))
 		}
 		if overflow := len(idle) - cfg.MaxIdleShown; overflow > 0 {
 			blocks = append(blocks, slack.NewContextBlock("",
@@ -327,11 +361,28 @@ func dashboardAgentWorkingBlock(a beadsapi.AgentBead) slack.Block {
 		slack.NewTextBlockObject("mrkdwn", line, false, false), nil, nil)
 }
 
-func dashboardAgentIdleBlock(a beadsapi.AgentBead) slack.Block {
-	line := fmt.Sprintf(":white_circle: *%s*", a.AgentName)
+func dashboardAgentStartingBlock(a beadsapi.AgentBead) slack.Block {
+	line := fmt.Sprintf(":hourglass_flowing_sand: *%s*", a.AgentName)
 	if a.Project != "" {
 		line += fmt.Sprintf(" · %s", a.Project)
 	}
+	return slack.NewSectionBlock(
+		slack.NewTextBlockObject("mrkdwn", line, false, false), nil, nil)
+}
+
+func dashboardAgentIdleBlock(a beadsapi.AgentBead, pendingCount int) slack.Block {
+	var indicator, suffix string
+	if pendingCount > 0 {
+		indicator = ":large_blue_circle:"
+		suffix = fmt.Sprintf(" · %d pending", pendingCount)
+	} else {
+		indicator = ":white_circle:"
+	}
+	line := fmt.Sprintf("%s *%s*", indicator, a.AgentName)
+	if a.Project != "" {
+		line += fmt.Sprintf(" · %s", a.Project)
+	}
+	line += suffix
 	return slack.NewSectionBlock(
 		slack.NewTextBlockObject("mrkdwn", line, false, false), nil, nil)
 }
@@ -352,13 +403,28 @@ func dashboardAgentDeadBlock(a beadsapi.AgentBead) slack.Block {
 
 // buildDashboardHash produces a content hash for change detection.
 func buildDashboardHash(agents []beadsapi.AgentBead, decisions []*beadsapi.BeadDetail) string {
+	// Build pending-decision count per agent for hash inclusion.
+	pendingByAgent := make(map[string]int, len(decisions))
+	for _, dec := range decisions {
+		if agentID := dec.Fields["requesting_agent_bead_id"]; agentID != "" {
+			pendingByAgent[agentID]++
+		}
+	}
+
 	var parts []string
 	for _, a := range agents {
-		state := "idle"
-		if a.AgentState == "failed" || a.PodPhase == "failed" {
+		var state string
+		switch {
+		case a.AgentState == "failed" || a.PodPhase == "failed":
 			state = "dead"
-		} else if a.AgentState == "working" {
+		case a.AgentState == "working":
 			state = "working"
+		case a.AgentState == "spawning":
+			state = "starting"
+		case pendingByAgent[a.ID] > 0:
+			state = fmt.Sprintf("decision:%d", pendingByAgent[a.ID])
+		default:
+			state = "idle"
 		}
 		parts = append(parts, fmt.Sprintf("%s:%s:%s", a.AgentName, state, a.Project))
 	}
