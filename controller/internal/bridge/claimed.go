@@ -1,8 +1,13 @@
 // Package bridge provides the claimed bead update watcher.
 //
-// Claimed watches the kbeads SSE event stream for bead update events and
-// nudges the assignee when a bead they have claimed is updated. This helps
-// agents notice changes to their in-progress work without polling.
+// Claimed watches the kbeads SSE event stream for bead update and closed
+// events and nudges the assignee when a bead they have claimed changes. This
+// helps agents notice changes to their in-progress work without polling.
+//
+// On update: nudge with a review prompt so the agent can react to the change.
+// On close: nudge with a checkpoint reminder so the agent creates a decision
+// bead before the Stop hook fires (closing without a decision leaves no
+// re-entry handle for the human operator).
 //
 // Note: the kbeads SSE update event does not include a "updated_by" field,
 // so nudges fire for all updates to claimed beads (including self-updates).
@@ -61,11 +66,12 @@ func NewClaimed(cfg ClaimedConfig) *Claimed {
 }
 
 // RegisterHandlers registers SSE event handlers on the given stream for
-// bead updated events.
+// bead updated and closed events.
 func (c *Claimed) RegisterHandlers(stream *SSEStream) {
 	stream.On("beads.bead.updated", c.handleUpdated)
+	stream.On("beads.bead.closed", c.handleClosed)
 	c.logger.Info("claimed watcher registered SSE handlers",
-		"topics", []string{"beads.bead.updated"})
+		"topics", []string{"beads.bead.updated", "beads.bead.closed"})
 }
 
 func (c *Claimed) handleUpdated(ctx context.Context, data []byte) {
@@ -96,7 +102,42 @@ func (c *Claimed) handleUpdated(ctx context.Context, data []byte) {
 		"assignee", bead.Assignee,
 		"type", bead.Type)
 
-	c.nudgeAgent(ctx, *bead)
+	message := fmt.Sprintf("Your claimed bead %s %q was updated — run 'kd show %s' to review",
+		bead.ID, bead.Title, bead.ID)
+	c.nudgeAgent(ctx, *bead, message)
+}
+
+func (c *Claimed) handleClosed(ctx context.Context, data []byte) {
+	bead := ParseBeadEvent(data)
+	if bead == nil {
+		c.logger.Debug("skipping malformed bead closed event")
+		return
+	}
+
+	// Only nudge for claimed beads (assignee present).
+	if bead.Assignee == "" {
+		return
+	}
+
+	// Skip infrastructure/system bead types.
+	if skipClaimedTypes[bead.Type] {
+		return
+	}
+
+	// Rate-limit: skip if we nudged for this bead recently.
+	if !c.shouldNudge(bead.ID) {
+		return
+	}
+
+	c.logger.Info("claimed bead closed, nudging assignee for checkpoint",
+		"id", bead.ID,
+		"title", bead.Title,
+		"assignee", bead.Assignee,
+		"type", bead.Type)
+
+	message := fmt.Sprintf("Your claimed bead %s %q was closed — work bead closed, create a decision checkpoint now",
+		bead.ID, bead.Title)
+	c.nudgeAgent(ctx, *bead, message)
 }
 
 // shouldNudge returns true if a nudge should be sent for the given bead ID.
@@ -123,11 +164,11 @@ func (c *Claimed) shouldNudge(beadID string) bool {
 	return true
 }
 
-// nudgeAgent looks up the agent's coop_url and POSTs a nudge.
-func (c *Claimed) nudgeAgent(ctx context.Context, bead BeadEvent) {
+// nudgeAgent looks up the agent's coop_url and POSTs a nudge with the given message.
+func (c *Claimed) nudgeAgent(ctx context.Context, bead BeadEvent, message string) {
 	agentBead, err := c.daemon.FindAgentBead(ctx, bead.Assignee)
 	if err != nil {
-		c.logger.Error("failed to get agent bead for claimed-update nudge",
+		c.logger.Error("failed to get agent bead for claimed nudge",
 			"agent", bead.Assignee, "bead", bead.ID, "error", err)
 		return
 	}
@@ -139,15 +180,12 @@ func (c *Claimed) nudgeAgent(ctx context.Context, bead BeadEvent) {
 		return
 	}
 
-	message := fmt.Sprintf("Your claimed bead %s %q was updated — run 'kd show %s' to review",
-		bead.ID, bead.Title, bead.ID)
-
 	if err := nudgeCoop(ctx, c.httpClient, coopURL, message); err != nil {
-		c.logger.Error("failed to nudge agent for claimed bead update",
+		c.logger.Error("failed to nudge agent for claimed bead",
 			"agent", bead.Assignee, "coop_url", coopURL, "error", err)
 		return
 	}
 
-	c.logger.Info("nudged agent for claimed bead update",
+	c.logger.Info("nudged agent for claimed bead",
 		"agent", bead.Assignee, "bead", bead.ID)
 }
