@@ -40,6 +40,18 @@ func defaultActor() string {
 	return "unknown"
 }
 
+// defaultProject returns the default project from environment variables.
+// Precedence: KD_PROJECT > BOAT_PROJECT > "" (none).
+func defaultProject() string {
+	if p := os.Getenv("KD_PROJECT"); p != "" {
+		return p
+	}
+	if p := os.Getenv("BOAT_PROJECT"); p != "" {
+		return p
+	}
+	return ""
+}
+
 func defaultHTTPURL() string {
 	if s := os.Getenv("BEADS_HTTP_URL"); s != "" {
 		return s
@@ -116,15 +128,6 @@ func init() {
 	rootCmd.AddCommand(primeCmd)
 	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(workspaceCmd)
-}
-
-// resolveProject returns the effective project name following the precedence:
-// KD_PROJECT > BOAT_PROJECT > "".
-func resolveProject() string {
-	if p := os.Getenv("KD_PROJECT"); p != "" {
-		return p
-	}
-	return os.Getenv("BOAT_PROJECT")
 }
 
 func main() {

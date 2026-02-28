@@ -59,6 +59,6 @@ func init() {
 	readyCmd.Flags().StringSliceP("type", "t", nil, "filter by type (repeatable)")
 	readyCmd.Flags().String("assignee", "", "filter by assignee")
 	readyCmd.Flags().Int("limit", 20, "maximum number of results")
-	readyCmd.Flags().String("project", resolveProject(), "filter by project label (default: $KD_PROJECT or $BOAT_PROJECT)")
+	readyCmd.Flags().String("project", defaultProject(), "filter by project label (default: $KD_PROJECT or $BOAT_PROJECT)")
 	readyCmd.Flags().Bool("all-projects", false, "show beads from all projects (disables project filter)")
 }
