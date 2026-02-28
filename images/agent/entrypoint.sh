@@ -808,7 +808,7 @@ trap 'forward_signal INT' INT
 
 # Start credential refresh in background (survives coop restarts).
 # Skip for mock agent commands — claudeless needs no OAuth credentials.
-if [ -z "${BOAT_COMMAND:-}" ]; then
+if [ "${MOCK_MODE}" != "1" ]; then
     refresh_credentials &
 fi
 
@@ -832,7 +832,7 @@ while true; do
     RESUME_FLAG=""
     MAX_STALE_RETRIES=2
     STALE_COUNT=$( (find "${CLAUDE_STATE}/projects" -maxdepth 2 -name '*.jsonl.stale' -type f 2>/dev/null || true) | wc -l | tr -d ' ')
-    if [ -z "${BOAT_COMMAND:-}" ] && [ "${SESSION_RESUME}" = "1" ] && [ -d "${CLAUDE_STATE}/projects" ] && [ "${STALE_COUNT:-0}" -lt "${MAX_STALE_RETRIES}" ]; then
+    if [ "${MOCK_MODE}" != "1" ] && [ "${SESSION_RESUME}" = "1" ] && [ -d "${CLAUDE_STATE}/projects" ] && [ "${STALE_COUNT:-0}" -lt "${MAX_STALE_RETRIES}" ]; then
         LATEST_LOG=$( (find "${CLAUDE_STATE}/projects" -maxdepth 2 -name '*.jsonl' -not -path '*/subagents/*' -type f -printf '%T@ %p\n' 2>/dev/null || true) \
             | sort -rn | head -1 | cut -d' ' -f2-)
         if [ -n "${LATEST_LOG}" ]; then
