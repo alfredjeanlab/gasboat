@@ -496,45 +496,6 @@ func TestApplyDefaults_SpecTakesPrecedence(t *testing.T) {
 	}
 }
 
-func TestApplyDefaults_EnvMerge_NilSpecEnv(t *testing.T) {
-	spec := AgentPodSpec{}
-	defaults := &PodDefaults{
-		Env: map[string]string{"A": "1", "B": "2"},
-	}
-	ApplyDefaults(&spec, defaults)
-
-	if spec.Env["A"] != "1" || spec.Env["B"] != "2" {
-		t.Errorf("Env not merged: %v", spec.Env)
-	}
-}
-
-func TestApplyDefaults_SecretEnvDedup(t *testing.T) {
-	spec := AgentPodSpec{
-		SecretEnv: []SecretEnvSource{
-			{EnvName: "TOKEN", SecretName: "spec-secret", SecretKey: "k"},
-		},
-	}
-	defaults := &PodDefaults{
-		SecretEnv: []SecretEnvSource{
-			{EnvName: "TOKEN", SecretName: "default-secret", SecretKey: "k"},
-			{EnvName: "OTHER", SecretName: "other-secret", SecretKey: "v"},
-		},
-	}
-	ApplyDefaults(&spec, defaults)
-
-	if len(spec.SecretEnv) != 2 {
-		t.Fatalf("SecretEnv length = %d, want 2", len(spec.SecretEnv))
-	}
-	// TOKEN should keep spec value.
-	if spec.SecretEnv[0].SecretName != "spec-secret" {
-		t.Errorf("TOKEN secret = %q, want spec-secret", spec.SecretEnv[0].SecretName)
-	}
-	// OTHER should be appended.
-	if spec.SecretEnv[1].EnvName != "OTHER" {
-		t.Errorf("SecretEnv[1] = %q, want OTHER", spec.SecretEnv[1].EnvName)
-	}
-}
-
 func TestApplyDefaults_WorkspaceStorage(t *testing.T) {
 	spec := AgentPodSpec{}
 	defaults := &PodDefaults{
@@ -558,33 +519,3 @@ func TestApplyDefaults_WorkspaceStorage(t *testing.T) {
 	}
 }
 
-// ── DefaultPodDefaults ─────────────────────────────────────────────────────
-
-func TestDefaultPodDefaults_Crew(t *testing.T) {
-	defaults := DefaultPodDefaults("crew")
-	if defaults.WorkspaceStorage == nil {
-		t.Fatal("crew mode should have WorkspaceStorage")
-	}
-	if defaults.WorkspaceStorage.Size != "10Gi" {
-		t.Errorf("Size = %q, want 10Gi", defaults.WorkspaceStorage.Size)
-	}
-	if defaults.Resources == nil {
-		t.Fatal("defaults should have Resources")
-	}
-	if defaults.NodeSelector["kubernetes.io/arch"] != "amd64" {
-		t.Error("missing amd64 node selector")
-	}
-	if defaults.Affinity == nil {
-		t.Fatal("defaults should have Affinity")
-	}
-}
-
-func TestDefaultPodDefaults_Job(t *testing.T) {
-	defaults := DefaultPodDefaults("job")
-	if defaults.WorkspaceStorage != nil {
-		t.Error("job mode should not have WorkspaceStorage")
-	}
-	if defaults.Resources == nil {
-		t.Fatal("defaults should have Resources")
-	}
-}

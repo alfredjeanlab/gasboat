@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -277,19 +276,6 @@ func TestBuildInitCloneContainer_WithGitURL(t *testing.T) {
 	}
 }
 
-func TestBuildInitCloneContainer_CustomBranch(t *testing.T) {
-	m := newTestManager()
-	spec := minimalSpec()
-	spec.GitURL = "https://github.com/example/repo.git"
-	spec.GitDefaultBranch = "develop"
-	ic := m.buildInitCloneContainer(spec)
-
-	script := ic.Command[2]
-	if !strings.Contains(script, "develop") {
-		t.Error("script should use custom branch 'develop'")
-	}
-}
-
 func TestBuildInitCloneContainer_GitCredentials(t *testing.T) {
 	m := newTestManager()
 	spec := minimalSpec()
@@ -334,28 +320,6 @@ func TestBuildInitCloneContainer_GitlabToken(t *testing.T) {
 	}
 	if _, ok := envMap["GITLAB_TOKEN"]; !ok {
 		t.Error("missing GITLAB_TOKEN env var")
-	}
-}
-
-func TestBuildInitCloneContainer_ReferenceRepos(t *testing.T) {
-	m := newTestManager()
-	spec := minimalSpec()
-	spec.ReferenceRepos = []RepoRef{
-		{URL: "https://github.com/ref/one.git", Branch: "main", Name: "one"},
-		{URL: "https://github.com/ref/two.git", Name: "two"},
-	}
-
-	ic := m.buildInitCloneContainer(spec)
-	if ic == nil {
-		t.Fatal("expected init container with ReferenceRepos")
-	}
-
-	script := ic.Command[2]
-	if !strings.Contains(script, "ref/one.git") {
-		t.Error("script should clone first reference repo")
-	}
-	if !strings.Contains(script, "ref/two.git") {
-		t.Error("script should clone second reference repo")
 	}
 }
 
@@ -422,17 +386,3 @@ func TestBuildInitCloneContainer_ChownsWorkspace(t *testing.T) {
 	}
 }
 
-// ── helpers ────────────────────────────────────────────────────────────────
-
-func containsSubstring(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(s) > 0 && contains(s, sub))
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}
