@@ -256,9 +256,12 @@ func (s *SSEStream) dispatch(ctx context.Context, id, topic, data string) {
 
 // sseBeadWrapper is the kbeads SSE payload for bead lifecycle events.
 // BeadCreated: {"bead": {...}}
+// BeadUpdated: {"bead": {...}, "changes": {"field": newValue, ...}}
 // BeadClosed:  {"bead": {...}, "closed_by": "..."}
 type sseBeadWrapper struct {
-	Bead json.RawMessage `json:"bead"`
+	Bead     json.RawMessage `json:"bead"`
+	ClosedBy string          `json:"closed_by,omitempty"`
+	Changes  map[string]any  `json:"changes,omitempty"`
 }
 
 // sseBeadData mirrors the kbeads model.Bead fields used by the bridge.
@@ -303,5 +306,7 @@ func ParseBeadEvent(data []byte) *BeadEvent {
 		Labels:    bead.Labels,
 		Fields:    fields,
 		Priority:  bead.Priority,
+		ClosedBy:  wrapper.ClosedBy,
+		Changes:   wrapper.Changes,
 	}
 }

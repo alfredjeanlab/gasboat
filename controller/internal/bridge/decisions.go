@@ -44,6 +44,8 @@ type BeadEvent struct {
 	Labels    []string          `json:"labels"`
 	Fields    map[string]string `json:"fields"`
 	Priority  int               `json:"priority"`
+	ClosedBy  string            `json:"closed_by,omitempty"` // present on close events
+	Changes   map[string]any    `json:"changes,omitempty"`   // present on update events
 }
 
 // Notifier sends decision lifecycle notifications to an external system.
