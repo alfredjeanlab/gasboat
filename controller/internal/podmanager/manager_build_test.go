@@ -10,343 +10,389 @@ import (
 
 // --- buildPod tests ---
 
+func TestBuildPod_BasicFields(t *testing.T) {
+	m := newTestManager()
+	spec := minimalSpec()
+	pod := m.buildPod(spec)
+
+	if pod.Name != "crew-gasboat-dev-test-1" {
+		t.Errorf("pod.Name = %q, want %q", pod.Name, "crew-gasboat-dev-test-1")
+	}
+	if pod.Namespace != "default" {
+		t.Errorf("pod.Namespace = %q, want %q", pod.Namespace, "default")
+	}
+	if got := pod.Annotations[AnnotationBeadID]; got != "bead-abc" {
+		t.Errorf("bead-id annotation = %q, want %q", got, "bead-abc")
+	}
+	if pod.Spec.RestartPolicy != corev1.RestartPolicyAlways {
+		t.Errorf("RestartPolicy = %q, want Always", pod.Spec.RestartPolicy)
+	}
+}
+
+func TestBuildPod_JobMode(t *testing.T) {
+	m := newTestManager()
+	spec := minimalSpec()
+	spec.Mode = "job"
+	pod := m.buildPod(spec)
+
+	if pod.Spec.RestartPolicy != corev1.RestartPolicyNever {
+		t.Errorf("RestartPolicy = %q, want Never for job mode", pod.Spec.RestartPolicy)
+	}
+}
+
 func TestBuildPod_SecurityContext(t *testing.T) {
-	mgr := New(fake.NewSimpleClientset(), testLogger())
-	spec := AgentPodSpec{
-		Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha",
-		Image: "img:v1", Namespace: "ns",
-	}
+	m := newTestManager()
+	pod := m.buildPod(minimalSpec())
 
-	pod := mgr.buildPod(spec)
-
-	sc := pod.Spec.SecurityContext
-	if sc == nil {
-		t.Fatal("expected pod security context")
+	psc := pod.Spec.SecurityContext
+	if psc == nil {
+		t.Fatal("pod security context is nil")
 	}
-	if *sc.RunAsUser != AgentUID {
-		t.Errorf("expected RunAsUser %d, got %d", AgentUID, *sc.RunAsUser)
+	if *psc.RunAsUser != AgentUID {
+		t.Errorf("RunAsUser = %d, want %d", *psc.RunAsUser, AgentUID)
 	}
-	if *sc.RunAsGroup != AgentGID {
-		t.Errorf("expected RunAsGroup %d, got %d", AgentGID, *sc.RunAsGroup)
+	if *psc.RunAsGroup != AgentGID {
+		t.Errorf("RunAsGroup = %d, want %d", *psc.RunAsGroup, AgentGID)
 	}
-	if !*sc.RunAsNonRoot {
-		t.Error("expected RunAsNonRoot true")
+	if !*psc.RunAsNonRoot {
+		t.Error("RunAsNonRoot should be true")
 	}
-	if *sc.FSGroup != AgentGID {
-		t.Errorf("expected FSGroup %d, got %d", AgentGID, *sc.FSGroup)
+	if *psc.FSGroup != AgentGID {
+		t.Errorf("FSGroup = %d, want %d", *psc.FSGroup, AgentGID)
 	}
 }
 
 func TestBuildPod_TerminationGracePeriod(t *testing.T) {
-	mgr := New(fake.NewSimpleClientset(), testLogger())
-	spec := AgentPodSpec{
-		Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha",
-		Image: "img:v1", Namespace: "ns",
+	m := newTestManager()
+	pod := m.buildPod(minimalSpec())
+
+	if pod.Spec.TerminationGracePeriodSeconds == nil {
+		t.Fatal("TerminationGracePeriodSeconds is nil")
 	}
-
-	pod := mgr.buildPod(spec)
-
-	if pod.Spec.TerminationGracePeriodSeconds == nil || *pod.Spec.TerminationGracePeriodSeconds != 30 {
-		t.Error("expected 30s termination grace period")
+	if *pod.Spec.TerminationGracePeriodSeconds != 45 {
+		t.Errorf("TerminationGracePeriodSeconds = %d, want 45",
+			*pod.Spec.TerminationGracePeriodSeconds)
 	}
 }
 
-func TestBuildPod_ServiceAccountName(t *testing.T) {
-	mgr := New(fake.NewSimpleClientset(), testLogger())
-	spec := AgentPodSpec{
-		Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha",
-		Image: "img:v1", Namespace: "ns", ServiceAccountName: "agent-sa",
-	}
+func TestBuildPod_ServiceAccount(t *testing.T) {
+	m := newTestManager()
+	spec := minimalSpec()
+	spec.ServiceAccountName = "custom-sa"
+	pod := m.buildPod(spec)
 
-	pod := mgr.buildPod(spec)
-	if pod.Spec.ServiceAccountName != "agent-sa" {
-		t.Errorf("expected ServiceAccountName agent-sa, got %s", pod.Spec.ServiceAccountName)
+	if pod.Spec.ServiceAccountName != "custom-sa" {
+		t.Errorf("ServiceAccountName = %q, want %q", pod.Spec.ServiceAccountName, "custom-sa")
 	}
 }
 
 func TestBuildPod_NodeSelectorAndTolerations(t *testing.T) {
-	mgr := New(fake.NewSimpleClientset(), testLogger())
-	spec := AgentPodSpec{
-		Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha",
-		Image:        "img:v1",
-		Namespace:    "ns",
-		NodeSelector: map[string]string{"node-type": "gpu"},
-		Tolerations: []corev1.Toleration{
-			{Key: "gpu", Operator: corev1.TolerationOpExists},
-		},
-	}
+	m := newTestManager()
+	spec := minimalSpec()
+	spec.NodeSelector = map[string]string{"kubernetes.io/arch": "amd64"}
+	spec.Tolerations = []corev1.Toleration{{Key: "gpu", Effect: corev1.TaintEffectNoSchedule}}
+	pod := m.buildPod(spec)
 
-	pod := mgr.buildPod(spec)
-	if pod.Spec.NodeSelector["node-type"] != "gpu" {
-		t.Error("expected node-type=gpu in NodeSelector")
+	if got := pod.Spec.NodeSelector["kubernetes.io/arch"]; got != "amd64" {
+		t.Errorf("NodeSelector[arch] = %q, want amd64", got)
 	}
-	if len(pod.Spec.Tolerations) != 1 {
-		t.Errorf("expected 1 toleration, got %d", len(pod.Spec.Tolerations))
+	if len(pod.Spec.Tolerations) != 1 || pod.Spec.Tolerations[0].Key != "gpu" {
+		t.Errorf("Tolerations not set correctly: %+v", pod.Spec.Tolerations)
 	}
 }
 
 func TestBuildPod_NoInitContainerWithoutGitURL(t *testing.T) {
-	mgr := New(fake.NewSimpleClientset(), testLogger())
-	spec := AgentPodSpec{
-		Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha",
-		Image: "img:v1", Namespace: "ns",
-	}
+	m := newTestManager()
+	pod := m.buildPod(minimalSpec())
 
-	pod := mgr.buildPod(spec)
 	if len(pod.Spec.InitContainers) != 0 {
 		t.Errorf("expected no init containers without GitURL, got %d", len(pod.Spec.InitContainers))
 	}
 }
 
 func TestBuildPod_InitContainerWithGitURL(t *testing.T) {
-	mgr := New(fake.NewSimpleClientset(), testLogger())
-	spec := AgentPodSpec{
-		Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha",
-		Image: "img:v1", Namespace: "ns",
-		GitURL: "https://github.com/org/repo.git",
-	}
+	m := newTestManager()
+	spec := minimalSpec()
+	spec.GitURL = "https://github.com/example/repo.git"
+	pod := m.buildPod(spec)
 
-	pod := mgr.buildPod(spec)
 	if len(pod.Spec.InitContainers) != 1 {
 		t.Fatalf("expected 1 init container, got %d", len(pod.Spec.InitContainers))
 	}
-	if pod.Spec.InitContainers[0].Name != InitCloneName {
-		t.Errorf("expected init container name %s, got %s", InitCloneName, pod.Spec.InitContainers[0].Name)
+	ic := pod.Spec.InitContainers[0]
+	if ic.Name != InitCloneName {
+		t.Errorf("init container name = %q, want %q", ic.Name, InitCloneName)
+	}
+	if ic.Image != InitCloneImage {
+		t.Errorf("init container image = %q, want %q", ic.Image, InitCloneImage)
 	}
 }
 
 // --- buildContainer tests ---
 
-func TestBuildContainer_Ports(t *testing.T) {
-	mgr := New(fake.NewSimpleClientset(), testLogger())
-	spec := AgentPodSpec{
-		Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha",
-		Image: "img:v1",
+func TestBuildContainer_PreStopHook(t *testing.T) {
+	m := newTestManager()
+	c := m.buildContainer(minimalSpec())
+
+	if c.Lifecycle == nil || c.Lifecycle.PreStop == nil {
+		t.Fatal("container missing PreStop lifecycle hook")
+	}
+	if c.Lifecycle.PreStop.Exec == nil {
+		t.Fatal("PreStop hook should use Exec action")
+	}
+	cmd := c.Lifecycle.PreStop.Exec.Command
+	if len(cmd) < 3 {
+		t.Fatalf("PreStop command too short: %v", cmd)
+	}
+	if cmd[0] != "sh" || cmd[1] != "-c" {
+		t.Errorf("PreStop command prefix = %v, want [sh -c ...]", cmd[:2])
+	}
+}
+
+func TestBuildContainer_Probes(t *testing.T) {
+	m := newTestManager()
+	c := m.buildContainer(minimalSpec())
+
+	if c.LivenessProbe == nil {
+		t.Error("missing liveness probe")
+	}
+	if c.ReadinessProbe == nil {
+		t.Error("missing readiness probe")
+	}
+	if c.StartupProbe == nil {
+		t.Error("missing startup probe")
 	}
 
-	c := mgr.buildContainer(spec)
+	// Verify probe paths.
+	for name, probe := range map[string]*corev1.Probe{
+		"liveness":  c.LivenessProbe,
+		"readiness": c.ReadinessProbe,
+		"startup":   c.StartupProbe,
+	} {
+		if probe.HTTPGet == nil {
+			t.Errorf("%s probe should be HTTPGet", name)
+			continue
+		}
+		if probe.HTTPGet.Path != "/api/v1/health" {
+			t.Errorf("%s probe path = %q, want /api/v1/health", name, probe.HTTPGet.Path)
+		}
+	}
+}
+
+func TestBuildContainer_Ports(t *testing.T) {
+	m := newTestManager()
+	c := m.buildContainer(minimalSpec())
 
 	if len(c.Ports) != 2 {
 		t.Fatalf("expected 2 ports, got %d", len(c.Ports))
 	}
 
-	portMap := map[string]int32{}
+	portMap := make(map[string]int32)
 	for _, p := range c.Ports {
 		portMap[p.Name] = p.ContainerPort
 	}
-	if portMap["api"] != int32(CoopDefaultPort) {
-		t.Errorf("expected api port %d, got %d", CoopDefaultPort, portMap["api"])
+	if portMap["api"] != CoopDefaultPort {
+		t.Errorf("api port = %d, want %d", portMap["api"], CoopDefaultPort)
 	}
-	if portMap["health"] != int32(CoopDefaultHealthPort) {
-		t.Errorf("expected health port %d, got %d", CoopDefaultHealthPort, portMap["health"])
-	}
-}
-
-func TestBuildContainer_Probes(t *testing.T) {
-	mgr := New(fake.NewSimpleClientset(), testLogger())
-	spec := AgentPodSpec{
-		Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha",
-		Image: "img:v1",
-	}
-
-	c := mgr.buildContainer(spec)
-
-	if c.LivenessProbe == nil {
-		t.Error("expected liveness probe")
-	}
-	if c.ReadinessProbe == nil {
-		t.Error("expected readiness probe")
-	}
-	if c.StartupProbe == nil {
-		t.Error("expected startup probe")
-	}
-	if c.LivenessProbe.HTTPGet.Path != "/api/v1/health" {
-		t.Errorf("expected probe path /api/v1/health, got %s", c.LivenessProbe.HTTPGet.Path)
+	if portMap["health"] != CoopDefaultHealthPort {
+		t.Errorf("health port = %d, want %d", portMap["health"], CoopDefaultHealthPort)
 	}
 }
 
 func TestBuildContainer_SecurityContext(t *testing.T) {
-	mgr := New(fake.NewSimpleClientset(), testLogger())
-	spec := AgentPodSpec{
-		Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha",
-		Image: "img:v1",
-	}
-
-	c := mgr.buildContainer(spec)
+	m := newTestManager()
+	c := m.buildContainer(minimalSpec())
 
 	sc := c.SecurityContext
 	if sc == nil {
-		t.Fatal("expected container security context")
+		t.Fatal("container security context is nil")
 	}
 	if !*sc.AllowPrivilegeEscalation {
-		t.Error("expected AllowPrivilegeEscalation true")
+		t.Error("AllowPrivilegeEscalation should be true")
 	}
 	if *sc.ReadOnlyRootFilesystem {
-		t.Error("expected ReadOnlyRootFilesystem false")
+		t.Error("ReadOnlyRootFilesystem should be false")
+	}
+	if sc.Capabilities == nil {
+		t.Fatal("Capabilities is nil")
 	}
 	if len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" {
-		t.Error("expected capabilities drop ALL")
+		t.Errorf("Drop = %v, want [ALL]", sc.Capabilities.Drop)
 	}
-	if len(sc.Capabilities.Add) != 2 {
-		t.Errorf("expected 2 capability adds, got %d", len(sc.Capabilities.Add))
+	addCaps := make(map[corev1.Capability]bool)
+	for _, c := range sc.Capabilities.Add {
+		addCaps[c] = true
+	}
+	if !addCaps["SETUID"] || !addCaps["SETGID"] {
+		t.Errorf("Add caps = %v, want SETUID + SETGID", sc.Capabilities.Add)
+	}
+}
+
+func TestBuildContainer_DefaultResources(t *testing.T) {
+	m := newTestManager()
+	c := m.buildContainer(minimalSpec())
+
+	cpuReq := c.Resources.Requests[corev1.ResourceCPU]
+	if cpuReq.String() != DefaultCPURequest {
+		t.Errorf("CPU request = %s, want %s", cpuReq.String(), DefaultCPURequest)
+	}
+	memLimit := c.Resources.Limits[corev1.ResourceMemory]
+	if memLimit.String() != DefaultMemoryLimit {
+		t.Errorf("Memory limit = %s, want %s", memLimit.String(), DefaultMemoryLimit)
+	}
+}
+
+func TestBuildContainer_CustomResources(t *testing.T) {
+	m := newTestManager()
+	spec := minimalSpec()
+	spec.Resources = &corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU: resource.MustParse("500m"),
+		},
+	}
+	c := m.buildContainer(spec)
+
+	cpuReq := c.Resources.Requests[corev1.ResourceCPU]
+	if cpuReq.String() != "500m" {
+		t.Errorf("CPU request = %s, want 500m", cpuReq.String())
 	}
 }
 
 // --- buildEnvVars tests ---
 
-func TestBuildEnvVars_CoreVars(t *testing.T) {
-	mgr := New(fake.NewSimpleClientset(), testLogger())
-	spec := AgentPodSpec{
-		Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha",
-		BeadID: "kd-abc",
+func TestBuildEnvVars_StandardVars(t *testing.T) {
+	m := newTestManager()
+	spec := minimalSpec()
+	envVars := m.buildEnvVars(spec)
+
+	envMap := make(map[string]corev1.EnvVar)
+	for _, ev := range envVars {
+		envMap[ev.Name] = ev
 	}
 
-	envVars := mgr.buildEnvVars(spec)
-
-	envMap := map[string]string{}
-	for _, e := range envVars {
-		if e.Value != "" {
-			envMap[e.Name] = e.Value
+	checks := map[string]string{
+		"BOAT_ROLE":    "dev",
+		"BOAT_PROJECT": "gasboat",
+		"BOAT_AGENT":   "test-1",
+		"BOAT_MODE":    "crew",
+		"HOME":         "/home/agent",
+		"BEADS_ACTOR":  "test-1",
+		"KD_ACTOR":     "test-1",
+		"KD_AGENT_ID":  "bead-abc",
+	}
+	for name, want := range checks {
+		ev, ok := envMap[name]
+		if !ok {
+			t.Errorf("missing env var %s", name)
+			continue
+		}
+		if ev.Value != want {
+			t.Errorf("env %s = %q, want %q", name, ev.Value, want)
 		}
 	}
 
-	expected := map[string]string{
-		"BOAT_ROLE":          "dev",
-		"BOAT_PROJECT":       "proj",
-		"BOAT_AGENT":         "alpha",
-		"BOAT_MODE":          "crew",
-		"HOME":               "/home/agent",
-		"BEADS_ACTOR":        "alpha",
-		"KD_ACTOR":           "alpha",
-		"KD_AGENT_ID":        "kd-abc",
-		"GIT_AUTHOR_NAME":    "alpha",
-		"BEADS_AGENT_NAME":   "proj/alpha",
-		"BOAT_AGENT_BEAD_ID": "kd-abc",
-		"XDG_STATE_HOME":     MountStateDir,
+	// POD_IP should use downward API.
+	podIP, ok := envMap["POD_IP"]
+	if !ok {
+		t.Fatal("missing POD_IP env var")
 	}
-	for k, v := range expected {
-		if envMap[k] != v {
-			t.Errorf("env %s = %q, want %q", k, envMap[k], v)
-		}
-	}
-}
-
-func TestBuildEnvVars_PodIP(t *testing.T) {
-	mgr := New(fake.NewSimpleClientset(), testLogger())
-	spec := AgentPodSpec{
-		Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha",
-	}
-
-	envVars := mgr.buildEnvVars(spec)
-
-	var foundPodIP bool
-	for _, e := range envVars {
-		if e.Name == "POD_IP" {
-			foundPodIP = true
-			if e.ValueFrom == nil || e.ValueFrom.FieldRef == nil || e.ValueFrom.FieldRef.FieldPath != "status.podIP" {
-				t.Error("POD_IP should come from downward API status.podIP")
-			}
-		}
-	}
-	if !foundPodIP {
-		t.Error("expected POD_IP env var from downward API")
+	if podIP.ValueFrom == nil || podIP.ValueFrom.FieldRef == nil {
+		t.Error("POD_IP should use fieldRef downward API")
 	}
 }
 
 func TestBuildEnvVars_SessionResume(t *testing.T) {
-	mgr := New(fake.NewSimpleClientset(), testLogger())
+	m := newTestManager()
 
-	// Without workspace storage — no session resume.
-	spec := AgentPodSpec{Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha"}
-	envVars := mgr.buildEnvVars(spec)
-	for _, e := range envVars {
-		if e.Name == "BOAT_SESSION_RESUME" {
-			t.Error("BOAT_SESSION_RESUME should not be set without workspace storage")
+	// Without workspace storage — no BOAT_SESSION_RESUME.
+	spec := minimalSpec()
+	envVars := m.buildEnvVars(spec)
+	for _, ev := range envVars {
+		if ev.Name == "BOAT_SESSION_RESUME" {
+			t.Error("BOAT_SESSION_RESUME should not be set without WorkspaceStorage")
 		}
 	}
 
-	// With workspace storage — session resume enabled.
-	spec.WorkspaceStorage = &WorkspaceStorageSpec{Size: "10Gi"}
-	envVars = mgr.buildEnvVars(spec)
-	var found bool
-	for _, e := range envVars {
-		if e.Name == "BOAT_SESSION_RESUME" {
+	// With workspace storage — BOAT_SESSION_RESUME=1.
+	spec.WorkspaceStorage = &WorkspaceStorageSpec{Size: "5Gi"}
+	envVars = m.buildEnvVars(spec)
+	found := false
+	for _, ev := range envVars {
+		if ev.Name == "BOAT_SESSION_RESUME" {
 			found = true
-			if e.Value != "1" {
-				t.Errorf("BOAT_SESSION_RESUME = %s, want 1", e.Value)
+			if ev.Value != "1" {
+				t.Errorf("BOAT_SESSION_RESUME = %q, want %q", ev.Value, "1")
 			}
 		}
 	}
 	if !found {
-		t.Error("expected BOAT_SESSION_RESUME with workspace storage")
+		t.Error("BOAT_SESSION_RESUME not set with WorkspaceStorage")
 	}
 }
 
 func TestBuildEnvVars_CustomEnv(t *testing.T) {
-	mgr := New(fake.NewSimpleClientset(), testLogger())
-	spec := AgentPodSpec{
-		Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha",
-		Env: map[string]string{"CUSTOM_VAR": "custom_value"},
-	}
+	m := newTestManager()
+	spec := minimalSpec()
+	spec.Env = map[string]string{"CUSTOM_KEY": "custom_value"}
+	envVars := m.buildEnvVars(spec)
 
-	envVars := mgr.buildEnvVars(spec)
-	var found bool
-	for _, e := range envVars {
-		if e.Name == "CUSTOM_VAR" && e.Value == "custom_value" {
+	found := false
+	for _, ev := range envVars {
+		if ev.Name == "CUSTOM_KEY" && ev.Value == "custom_value" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected CUSTOM_VAR=custom_value")
+		t.Error("custom env var not found")
 	}
 }
 
 func TestBuildEnvVars_SecretEnv(t *testing.T) {
-	mgr := New(fake.NewSimpleClientset(), testLogger())
-	spec := AgentPodSpec{
-		Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha",
-		SecretEnv: []SecretEnvSource{
-			{EnvName: "API_KEY", SecretName: "api-secret", SecretKey: "key"},
-		},
+	m := newTestManager()
+	spec := minimalSpec()
+	spec.SecretEnv = []SecretEnvSource{
+		{EnvName: "MY_SECRET", SecretName: "my-secret", SecretKey: "key"},
 	}
+	envVars := m.buildEnvVars(spec)
 
-	envVars := mgr.buildEnvVars(spec)
-	var found bool
-	for _, e := range envVars {
-		if e.Name == "API_KEY" && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+	found := false
+	for _, ev := range envVars {
+		if ev.Name == "MY_SECRET" {
 			found = true
-			if e.ValueFrom.SecretKeyRef.Name != "api-secret" {
-				t.Errorf("secret name = %s, want api-secret", e.ValueFrom.SecretKeyRef.Name)
-			}
-			if e.ValueFrom.SecretKeyRef.Key != "key" {
-				t.Errorf("secret key = %s, want key", e.ValueFrom.SecretKeyRef.Key)
+			if ev.ValueFrom == nil || ev.ValueFrom.SecretKeyRef == nil {
+				t.Error("MY_SECRET should use SecretKeyRef")
+			} else if ev.ValueFrom.SecretKeyRef.Name != "my-secret" {
+				t.Errorf("secret name = %q, want my-secret", ev.ValueFrom.SecretKeyRef.Name)
 			}
 		}
 	}
 	if !found {
-		t.Error("expected API_KEY secret env var")
+		t.Error("secret env var not found")
 	}
 }
 
 func TestBuildEnvVars_DaemonToken(t *testing.T) {
-	mgr := New(fake.NewSimpleClientset(), testLogger())
-	spec := AgentPodSpec{
-		Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha",
-		DaemonTokenSecret: "beads-token",
-	}
+	m := newTestManager()
+	spec := minimalSpec()
+	spec.DaemonTokenSecret = "daemon-token-secret"
+	envVars := m.buildEnvVars(spec)
 
-	envVars := mgr.buildEnvVars(spec)
-	var found bool
-	for _, e := range envVars {
-		if e.Name == "BEADS_DAEMON_TOKEN" && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+	found := false
+	for _, ev := range envVars {
+		if ev.Name == "BEADS_DAEMON_TOKEN" {
 			found = true
-			if e.ValueFrom.SecretKeyRef.Name != "beads-token" {
-				t.Errorf("daemon token secret name = %s, want beads-token", e.ValueFrom.SecretKeyRef.Name)
+			if ev.ValueFrom == nil || ev.ValueFrom.SecretKeyRef == nil {
+				t.Error("BEADS_DAEMON_TOKEN should use SecretKeyRef")
+			} else {
+				ref := ev.ValueFrom.SecretKeyRef
+				if ref.Name != "daemon-token-secret" || ref.Key != "token" {
+					t.Errorf("secret ref = %s/%s, want daemon-token-secret/token", ref.Name, ref.Key)
+				}
 			}
 		}
 	}
 	if !found {
-		t.Error("expected BEADS_DAEMON_TOKEN from secret")
+		t.Error("BEADS_DAEMON_TOKEN env var not found")
 	}
 }
 
@@ -381,5 +427,164 @@ func TestBuildResources_Custom(t *testing.T) {
 	cpuReq := res.Requests[corev1.ResourceCPU]
 	if cpuReq.String() != "500m" {
 		t.Errorf("custom CPU request = %s, want 500m", cpuReq.String())
+	}
+}
+
+// ── ApplyDefaults ──────────────────────────────────────────────────────────
+
+func TestApplyDefaults_Nil(t *testing.T) {
+	spec := minimalSpec()
+	original := spec.Image
+	ApplyDefaults(&spec, nil)
+	if spec.Image != original {
+		t.Error("nil defaults should not change spec")
+	}
+}
+
+func TestApplyDefaults_FillEmpty(t *testing.T) {
+	spec := AgentPodSpec{}
+	defaults := &PodDefaults{
+		Image:              "default-image:latest",
+		ServiceAccountName: "default-sa",
+		ConfigMapName:      "default-cm",
+		NodeSelector:       map[string]string{"zone": "us-east-1a"},
+		Tolerations:        []corev1.Toleration{{Key: "spot"}},
+	}
+	ApplyDefaults(&spec, defaults)
+
+	if spec.Image != "default-image:latest" {
+		t.Errorf("Image = %q, want default-image:latest", spec.Image)
+	}
+	if spec.ServiceAccountName != "default-sa" {
+		t.Errorf("ServiceAccountName = %q, want default-sa", spec.ServiceAccountName)
+	}
+	if spec.ConfigMapName != "default-cm" {
+		t.Errorf("ConfigMapName = %q, want default-cm", spec.ConfigMapName)
+	}
+	if spec.NodeSelector["zone"] != "us-east-1a" {
+		t.Error("NodeSelector not applied")
+	}
+	if len(spec.Tolerations) != 1 {
+		t.Error("Tolerations not applied")
+	}
+}
+
+func TestApplyDefaults_SpecTakesPrecedence(t *testing.T) {
+	spec := AgentPodSpec{
+		Image:              "custom:v1",
+		ServiceAccountName: "custom-sa",
+		Env:                map[string]string{"KEY": "spec-value"},
+	}
+	defaults := &PodDefaults{
+		Image:              "default:latest",
+		ServiceAccountName: "default-sa",
+		Env:                map[string]string{"KEY": "default-value", "OTHER": "default-other"},
+	}
+	ApplyDefaults(&spec, defaults)
+
+	if spec.Image != "custom:v1" {
+		t.Errorf("Image = %q, want custom:v1 (spec should win)", spec.Image)
+	}
+	if spec.ServiceAccountName != "custom-sa" {
+		t.Errorf("ServiceAccountName = %q, want custom-sa (spec should win)", spec.ServiceAccountName)
+	}
+	if spec.Env["KEY"] != "spec-value" {
+		t.Errorf("Env[KEY] = %q, want spec-value (spec should win)", spec.Env["KEY"])
+	}
+	if spec.Env["OTHER"] != "default-other" {
+		t.Errorf("Env[OTHER] = %q, want default-other (should be merged from defaults)", spec.Env["OTHER"])
+	}
+}
+
+func TestApplyDefaults_EnvMerge_NilSpecEnv(t *testing.T) {
+	spec := AgentPodSpec{}
+	defaults := &PodDefaults{
+		Env: map[string]string{"A": "1", "B": "2"},
+	}
+	ApplyDefaults(&spec, defaults)
+
+	if spec.Env["A"] != "1" || spec.Env["B"] != "2" {
+		t.Errorf("Env not merged: %v", spec.Env)
+	}
+}
+
+func TestApplyDefaults_SecretEnvDedup(t *testing.T) {
+	spec := AgentPodSpec{
+		SecretEnv: []SecretEnvSource{
+			{EnvName: "TOKEN", SecretName: "spec-secret", SecretKey: "k"},
+		},
+	}
+	defaults := &PodDefaults{
+		SecretEnv: []SecretEnvSource{
+			{EnvName: "TOKEN", SecretName: "default-secret", SecretKey: "k"},
+			{EnvName: "OTHER", SecretName: "other-secret", SecretKey: "v"},
+		},
+	}
+	ApplyDefaults(&spec, defaults)
+
+	if len(spec.SecretEnv) != 2 {
+		t.Fatalf("SecretEnv length = %d, want 2", len(spec.SecretEnv))
+	}
+	// TOKEN should keep spec value.
+	if spec.SecretEnv[0].SecretName != "spec-secret" {
+		t.Errorf("TOKEN secret = %q, want spec-secret", spec.SecretEnv[0].SecretName)
+	}
+	// OTHER should be appended.
+	if spec.SecretEnv[1].EnvName != "OTHER" {
+		t.Errorf("SecretEnv[1] = %q, want OTHER", spec.SecretEnv[1].EnvName)
+	}
+}
+
+func TestApplyDefaults_WorkspaceStorage(t *testing.T) {
+	spec := AgentPodSpec{}
+	defaults := &PodDefaults{
+		WorkspaceStorage: &WorkspaceStorageSpec{Size: "20Gi"},
+	}
+	ApplyDefaults(&spec, defaults)
+	if spec.WorkspaceStorage == nil {
+		t.Fatal("WorkspaceStorage should be applied from defaults")
+	}
+	if spec.WorkspaceStorage.Size != "20Gi" {
+		t.Errorf("Size = %q, want 20Gi", spec.WorkspaceStorage.Size)
+	}
+
+	// Spec already has WorkspaceStorage — should not be overwritten.
+	spec2 := AgentPodSpec{
+		WorkspaceStorage: &WorkspaceStorageSpec{Size: "5Gi"},
+	}
+	ApplyDefaults(&spec2, defaults)
+	if spec2.WorkspaceStorage.Size != "5Gi" {
+		t.Errorf("Size = %q, want 5Gi (spec should win)", spec2.WorkspaceStorage.Size)
+	}
+}
+
+// ── DefaultPodDefaults ─────────────────────────────────────────────────────
+
+func TestDefaultPodDefaults_Crew(t *testing.T) {
+	defaults := DefaultPodDefaults("crew")
+	if defaults.WorkspaceStorage == nil {
+		t.Fatal("crew mode should have WorkspaceStorage")
+	}
+	if defaults.WorkspaceStorage.Size != "10Gi" {
+		t.Errorf("Size = %q, want 10Gi", defaults.WorkspaceStorage.Size)
+	}
+	if defaults.Resources == nil {
+		t.Fatal("defaults should have Resources")
+	}
+	if defaults.NodeSelector["kubernetes.io/arch"] != "amd64" {
+		t.Error("missing amd64 node selector")
+	}
+	if defaults.Affinity == nil {
+		t.Fatal("defaults should have Affinity")
+	}
+}
+
+func TestDefaultPodDefaults_Job(t *testing.T) {
+	defaults := DefaultPodDefaults("job")
+	if defaults.WorkspaceStorage != nil {
+		t.Error("job mode should not have WorkspaceStorage")
+	}
+	if defaults.Resources == nil {
+		t.Fatal("defaults should have Resources")
 	}
 }

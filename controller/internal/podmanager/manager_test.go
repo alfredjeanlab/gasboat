@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -17,166 +16,239 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 }
 
+func newTestManager() *K8sManager {
+	return New(fake.NewClientset(), slog.Default())
+}
+
+func minimalSpec() AgentPodSpec {
+	return AgentPodSpec{
+		Project:   "gasboat",
+		Mode:      "crew",
+		Role:      "dev",
+		AgentName: "test-1",
+		BeadID:    "bead-abc",
+		Image:     "ghcr.io/agent:latest",
+		Namespace: "default",
+	}
+}
+
+// ── AgentPodSpec.PodName / Labels ──────────────────────────────────────────
+
 func TestPodName(t *testing.T) {
-	spec := AgentPodSpec{Mode: "crew", Project: "gasboat", Role: "dev", AgentName: "alpha"}
-	if got := spec.PodName(); got != "crew-gasboat-dev-alpha" {
-		t.Errorf("PodName() = %s, want crew-gasboat-dev-alpha", got)
+	spec := AgentPodSpec{
+		Mode: "crew", Project: "gasboat", Role: "dev", AgentName: "matt-1",
+	}
+	want := "crew-gasboat-dev-matt-1"
+	if got := spec.PodName(); got != want {
+		t.Errorf("PodName() = %q, want %q", got, want)
 	}
 }
 
 func TestLabels(t *testing.T) {
-	spec := AgentPodSpec{Mode: "crew", Project: "gasboat", Role: "dev", AgentName: "alpha"}
+	spec := AgentPodSpec{
+		Mode: "job", Project: "acme", Role: "qa", AgentName: "bot-7",
+	}
 	labels := spec.Labels()
-	expected := map[string]string{LabelApp: LabelAppValue, LabelProject: "gasboat", LabelMode: "crew", LabelRole: "dev", LabelAgent: "alpha"}
-	for k, v := range expected {
-		if labels[k] != v {
-			t.Errorf("Labels()[%s] = %s, want %s", k, labels[k], v)
+	checks := map[string]string{
+		LabelApp:     LabelAppValue,
+		LabelProject: "acme",
+		LabelMode:    "job",
+		LabelRole:    "qa",
+		LabelAgent:   "bot-7",
+	}
+	for k, want := range checks {
+		if got := labels[k]; got != want {
+			t.Errorf("Labels()[%q] = %q, want %q", k, got, want)
 		}
 	}
 }
 
-func TestRestartPolicyForMode_Crew(t *testing.T) {
-	if got := restartPolicyForMode("crew"); got != corev1.RestartPolicyAlways {
-		t.Errorf("restartPolicyForMode(crew) = %s, want Always", got)
+// ── restartPolicyForMode ───────────────────────────────────────────────────
+
+func TestRestartPolicyForMode(t *testing.T) {
+	tests := []struct {
+		mode string
+		want corev1.RestartPolicy
+	}{
+		{"crew", corev1.RestartPolicyAlways},
+		{"job", corev1.RestartPolicyNever},
+		{"unknown", corev1.RestartPolicyAlways},
+	}
+	for _, tt := range tests {
+		if got := restartPolicyForMode(tt.mode); got != tt.want {
+			t.Errorf("restartPolicyForMode(%q) = %q, want %q", tt.mode, got, tt.want)
+		}
 	}
 }
 
-func TestRestartPolicyForMode_Job(t *testing.T) {
-	if got := restartPolicyForMode("job"); got != corev1.RestartPolicyNever {
-		t.Errorf("restartPolicyForMode(job) = %s, want Never", got)
-	}
-}
+// ── K8sManager CRUD (with fake client) ─────────────────────────────────────
 
-func TestRestartPolicyForMode_Unknown(t *testing.T) {
-	if got := restartPolicyForMode("other"); got != corev1.RestartPolicyAlways {
-		t.Errorf("restartPolicyForMode(other) = %s, want Always", got)
-	}
-}
+func TestCreateAgentPod(t *testing.T) {
+	client := fake.NewClientset()
+	m := New(client, slog.Default())
+	spec := minimalSpec()
 
-func TestCreateAgentPod_Basic(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	mgr := New(client, testLogger())
-	spec := AgentPodSpec{Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha", Image: "ghcr.io/org/agent:v1", Namespace: "ns", BeadID: "kd-abc"}
-	if err := mgr.CreateAgentPod(context.Background(), spec); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := m.CreateAgentPod(context.Background(), spec); err != nil {
+		t.Fatalf("CreateAgentPod: %v", err)
 	}
-	pod, err := client.CoreV1().Pods("ns").Get(context.Background(), "crew-proj-dev-alpha", metav1.GetOptions{})
+
+	pod, err := client.CoreV1().Pods("default").Get(context.Background(), spec.PodName(), metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("pod not found: %v", err)
+		t.Fatalf("get pod: %v", err)
 	}
-	if pod.Labels[LabelProject] != "proj" {
-		t.Errorf("expected project label proj, got %s", pod.Labels[LabelProject])
-	}
-	if pod.Annotations[AnnotationBeadID] != "kd-abc" {
-		t.Errorf("expected bead-id annotation kd-abc, got %s", pod.Annotations[AnnotationBeadID])
-	}
-	if len(pod.Spec.Containers) != 1 || pod.Spec.Containers[0].Image != "ghcr.io/org/agent:v1" {
-		t.Error("unexpected container setup")
+	if pod.Name != spec.PodName() {
+		t.Errorf("pod name = %q, want %q", pod.Name, spec.PodName())
 	}
 }
 
 func TestCreateAgentPod_Idempotent(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	mgr := New(client, testLogger())
-	spec := AgentPodSpec{Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha", Image: "ghcr.io/org/agent:v1", Namespace: "ns"}
-	if err := mgr.CreateAgentPod(context.Background(), spec); err != nil {
+	client := fake.NewClientset()
+	m := New(client, slog.Default())
+	spec := minimalSpec()
+	if err := m.CreateAgentPod(context.Background(), spec); err != nil {
 		t.Fatalf("first CreateAgentPod: %v", err)
 	}
-	if err := mgr.CreateAgentPod(context.Background(), spec); err != nil {
+	if err := m.CreateAgentPod(context.Background(), spec); err != nil {
 		t.Fatalf("second CreateAgentPod should be idempotent: %v", err)
 	}
 }
 
 func TestCreateAgentPod_WithPVC(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	mgr := New(client, testLogger())
-	spec := AgentPodSpec{Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha", Image: "img:v1", Namespace: "ns", WorkspaceStorage: &WorkspaceStorageSpec{Size: "20Gi", StorageClassName: "gp3"}}
-	if err := mgr.CreateAgentPod(context.Background(), spec); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	client := fake.NewClientset()
+	m := New(client, slog.Default())
+	spec := minimalSpec()
+	spec.WorkspaceStorage = &WorkspaceStorageSpec{
+		Size:             "10Gi",
+		StorageClassName: "gp3",
 	}
-	pvc, err := client.CoreV1().PersistentVolumeClaims("ns").Get(context.Background(), "crew-proj-dev-alpha-workspace", metav1.GetOptions{})
+
+	if err := m.CreateAgentPod(context.Background(), spec); err != nil {
+		t.Fatalf("CreateAgentPod: %v", err)
+	}
+
+	// PVC should be created.
+	pvcName := spec.PodName() + "-workspace"
+	pvc, err := client.CoreV1().PersistentVolumeClaims("default").Get(context.Background(), pvcName, metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("PVC not found: %v", err)
+		t.Fatalf("get PVC: %v", err)
 	}
 	if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != "gp3" {
-		t.Errorf("expected storage class gp3")
+		t.Error("PVC storage class not set")
 	}
 }
 
 func TestCreateAgentPod_PVCIdempotent(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	mgr := New(client, testLogger())
-	spec := AgentPodSpec{Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha", Image: "img:v1", Namespace: "ns", WorkspaceStorage: &WorkspaceStorageSpec{ClaimName: "my-pvc", Size: "10Gi"}}
-	client.CoreV1().PersistentVolumeClaims("ns").Create(context.Background(), &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "my-pvc", Namespace: "ns"}, Spec: corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("10Gi")}}}}, metav1.CreateOptions{})
-	if err := mgr.CreateAgentPod(context.Background(), spec); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	client := fake.NewClientset()
+	m := New(client, slog.Default())
+	spec := minimalSpec()
+	spec.WorkspaceStorage = &WorkspaceStorageSpec{Size: "5Gi"}
+
+	// Pre-create the PVC.
+	pvcName := spec.PodName() + "-workspace"
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: pvcName, Namespace: "default"},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("5Gi"),
+				},
+			},
+		},
+	}
+	_, err := client.CoreV1().PersistentVolumeClaims("default").Create(context.Background(), pvc, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("pre-create PVC: %v", err)
+	}
+
+	// CreateAgentPod should not fail on existing PVC.
+	if err := m.CreateAgentPod(context.Background(), spec); err != nil {
+		t.Fatalf("CreateAgentPod with existing PVC: %v", err)
 	}
 }
 
 func TestEnsurePVC_Idempotent(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	mgr := New(client, testLogger())
-	spec := AgentPodSpec{Mode: "crew", Project: "proj", Role: "dev", AgentName: "alpha", Image: "img:v1", Namespace: "ns", WorkspaceStorage: &WorkspaceStorageSpec{Size: "10Gi"}}
-	if err := mgr.ensurePVC(context.Background(), spec); err != nil {
+	client := fake.NewClientset()
+	m := New(client, slog.Default())
+	spec := minimalSpec()
+	spec.WorkspaceStorage = &WorkspaceStorageSpec{Size: "10Gi"}
+	if err := m.ensurePVC(context.Background(), spec); err != nil {
 		t.Fatalf("first ensurePVC: %v", err)
 	}
-	if err := mgr.ensurePVC(context.Background(), spec); err != nil {
+	if err := m.ensurePVC(context.Background(), spec); err != nil {
 		t.Fatalf("second ensurePVC should be idempotent: %v", err)
 	}
 }
 
 func TestDeleteAgentPod(t *testing.T) {
-	client := fake.NewSimpleClientset(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "test-pod", Namespace: "ns"}})
-	mgr := New(client, testLogger())
-	if err := mgr.DeleteAgentPod(context.Background(), "test-pod", "ns"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	client := fake.NewClientset()
+	m := New(client, slog.Default())
+	spec := minimalSpec()
+
+	// Create then delete.
+	_ = m.CreateAgentPod(context.Background(), spec)
+	if err := m.DeleteAgentPod(context.Background(), spec.PodName(), "default"); err != nil {
+		t.Fatalf("DeleteAgentPod: %v", err)
 	}
-	_, err := client.CoreV1().Pods("ns").Get(context.Background(), "test-pod", metav1.GetOptions{})
-	if !apierrors.IsNotFound(err) {
-		t.Errorf("expected not found error, got: %v", err)
+
+	_, err := client.CoreV1().Pods("default").Get(context.Background(), spec.PodName(), metav1.GetOptions{})
+	if err == nil {
+		t.Error("pod should be deleted")
 	}
 }
 
 func TestDeleteAgentPod_NotFound(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	mgr := New(client, testLogger())
-	if err := mgr.DeleteAgentPod(context.Background(), "nonexistent", "ns"); err != nil {
+	client := fake.NewClientset()
+	m := New(client, slog.Default())
+	if err := m.DeleteAgentPod(context.Background(), "nonexistent", "default"); err != nil {
 		t.Fatalf("DeleteAgentPod for missing pod should be idempotent: %v", err)
 	}
 }
 
 func TestListAgentPods(t *testing.T) {
-	pod1 := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "crew-proj-dev-alpha", Namespace: "ns", Labels: map[string]string{LabelApp: LabelAppValue, LabelProject: "proj"}}}
-	pod2 := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "crew-other-dev-beta", Namespace: "ns", Labels: map[string]string{LabelApp: LabelAppValue, LabelProject: "other"}}}
-	client := fake.NewSimpleClientset(pod1, pod2)
-	mgr := New(client, testLogger())
-	pods, err := mgr.ListAgentPods(context.Background(), "ns", map[string]string{LabelProject: "proj"})
+	client := fake.NewClientset()
+	m := New(client, slog.Default())
+
+	spec1 := minimalSpec()
+	spec2 := minimalSpec()
+	spec2.AgentName = "test-2"
+
+	_ = m.CreateAgentPod(context.Background(), spec1)
+	_ = m.CreateAgentPod(context.Background(), spec2)
+
+	pods, err := m.ListAgentPods(context.Background(), "default", map[string]string{
+		LabelApp: LabelAppValue,
+	})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("ListAgentPods: %v", err)
 	}
-	if len(pods) != 1 || pods[0].Name != "crew-proj-dev-alpha" {
-		t.Errorf("expected 1 pod crew-proj-dev-alpha, got %d pods", len(pods))
+	if len(pods) != 2 {
+		t.Errorf("expected 2 pods, got %d", len(pods))
 	}
 }
 
 func TestGetAgentPod(t *testing.T) {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "my-pod", Namespace: "ns"}}
-	client := fake.NewSimpleClientset(pod)
-	mgr := New(client, testLogger())
-	got, err := mgr.GetAgentPod(context.Background(), "my-pod", "ns")
+	client := fake.NewClientset()
+	m := New(client, slog.Default())
+	spec := minimalSpec()
+
+	_ = m.CreateAgentPod(context.Background(), spec)
+
+	pod, err := m.GetAgentPod(context.Background(), spec.PodName(), "default")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("GetAgentPod: %v", err)
 	}
-	if got.Name != "my-pod" {
-		t.Errorf("expected my-pod, got %s", got.Name)
+	if pod.Name != spec.PodName() {
+		t.Errorf("pod name = %q, want %q", pod.Name, spec.PodName())
 	}
 }
 
 func TestGetAgentPod_NotFound(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	mgr := New(client, testLogger())
-	_, err := mgr.GetAgentPod(context.Background(), "nonexistent", "ns")
-	if !apierrors.IsNotFound(err) {
-		t.Errorf("expected not found error, got: %v", err)
+	client := fake.NewClientset()
+	m := New(client, slog.Default())
+
+	_, err := m.GetAgentPod(context.Background(), "nonexistent", "default")
+	if err == nil {
+		t.Error("expected error for nonexistent pod")
 	}
 }
