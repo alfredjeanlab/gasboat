@@ -269,7 +269,7 @@ func (c *Client) ListTaskBeads(ctx context.Context) ([]*BeadDetail, error) {
 
 // ListAssignedTask returns the first in-progress issue-kind bead claimed by
 // agentName, or nil if none is found. Uses server-side kind=issue filtering
-// so only actionable work (task, bug, feature, etc.) is returned.
+// to exclude infrastructure beads (agent, decision, project, etc.).
 func (c *Client) ListAssignedTask(ctx context.Context, agentName string) (*BeadDetail, error) {
 	q := url.Values{}
 	q.Set("status", "in_progress")

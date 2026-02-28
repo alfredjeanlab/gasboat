@@ -22,6 +22,7 @@ var readyCmd = &cobra.Command{
 		q := beadsapi.ListBeadsQuery{
 			Statuses:   []string{"open"},
 			Types:      beadType,
+			Kinds:      []string{"issue"},
 			Limit:      limit,
 			Sort:       "-created_at",
 			NoOpenDeps: true,
@@ -38,7 +39,7 @@ var readyCmd = &cobra.Command{
 			return fmt.Errorf("listing ready beads: %w", err)
 		}
 
-		beads := filterToIssueKind(result.Beads)
+		beads := result.Beads
 		if jsonOutput {
 			printJSON(beads)
 		} else if len(beads) == 0 {

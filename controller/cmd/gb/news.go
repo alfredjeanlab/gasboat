@@ -55,6 +55,7 @@ func runNews(cmd *cobra.Command, args []string) error {
 
 	ipResult, err := daemon.ListBeadsFiltered(ctx, beadsapi.ListBeadsQuery{
 		Statuses: []string{"in_progress"},
+		Kinds:    []string{"issue"},
 		Labels:   projectLabels,
 		Limit:    limit,
 	})
@@ -64,6 +65,7 @@ func runNews(cmd *cobra.Command, args []string) error {
 
 	closedResult, err := daemon.ListBeadsFiltered(ctx, beadsapi.ListBeadsQuery{
 		Statuses: []string{"closed"},
+		Kinds:    []string{"issue"},
 		Labels:   projectLabels,
 		Sort:     "-updated_at",
 		Limit:    limit,
@@ -78,8 +80,7 @@ func runNews(cmd *cobra.Command, args []string) error {
 		ipBeads = filterOutAssignee(ipBeads, actor)
 		closedBeads = filterOutAssignee(closedBeads, actor)
 	}
-	ipBeads = filterToIssueKind(ipBeads)
-	closedBeads = filterToIssueKind(closedBeads)
+
 
 	if len(ipBeads) == 0 && len(closedBeads) == 0 {
 		fmt.Fprintf(os.Stdout, "\nNo recent activity (last %s)\n\n", windowStr)
@@ -153,15 +154,3 @@ func filterRecentlyClosed(beads []*beadsapi.BeadDetail, window time.Duration) []
 	return filtered
 }
 
-// filterToIssueKind returns only issue-kind beads, filtering out
-// infrastructure (data, config) beads that are noise in agent views.
-func filterToIssueKind(beads []*beadsapi.BeadDetail) []*beadsapi.BeadDetail {
-	var filtered []*beadsapi.BeadDetail
-	for _, b := range beads {
-		if b.Kind != "issue" {
-			continue
-		}
-		filtered = append(filtered, b)
-	}
-	return filtered
-}
