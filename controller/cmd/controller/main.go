@@ -427,6 +427,7 @@ func refreshProjectCache(ctx context.Context, logger *slog.Logger, daemon *beads
 		logger.Warn("failed to refresh project cache", "error", err)
 		return
 	}
+	cfg.ProjectCacheMu.Lock()
 	for name, info := range rigs {
 		cfg.ProjectCache[name] = config.ProjectCacheEntry{
 			Prefix:         info.Prefix,
@@ -441,6 +442,7 @@ func refreshProjectCache(ctx context.Context, logger *slog.Logger, daemon *beads
 			Repos:          info.Repos,
 		}
 	}
+	cfg.ProjectCacheMu.Unlock()
 	logger.Info("refreshed project cache", "count", len(rigs))
 }
 

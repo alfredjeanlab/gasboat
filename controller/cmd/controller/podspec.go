@@ -53,7 +53,12 @@ func BuildSpecFromBeadInfo(cfg *config.Config, project, mode, role, agentName st
 	podmanager.ApplyDefaults(&spec, defaults)
 
 	// Apply project-level overrides from project bead metadata.
+	// Hold read lock on ProjectCache to prevent concurrent map read/write
+	// with refreshProjectCache running in the periodic sync goroutine.
+	cfg.ProjectCacheMu.RLock()
 	applyProjectDefaults(cfg, &spec)
+	applyCommonConfig(cfg, &spec)
+	cfg.ProjectCacheMu.RUnlock()
 
 	// Agent-level RTK override.
 	if metadata["rtk_enabled"] == "false" {
@@ -61,8 +66,6 @@ func BuildSpecFromBeadInfo(cfg *config.Config, project, mode, role, agentName st
 	} else if metadata["rtk_enabled"] == "true" {
 		spec.Env["RTK_ENABLED"] = "true"
 	}
-
-	applyCommonConfig(cfg, &spec)
 
 	// Mock mode: override BOAT_COMMAND to run claudeless with a scenario file.
 	if scenario := metadata["mock_scenario"]; scenario != "" {
@@ -97,8 +100,12 @@ func buildAgentPodSpec(cfg *config.Config, event subscriber.Event) podmanager.Ag
 	defaults := podmanager.DefaultPodDefaults(mode)
 	podmanager.ApplyDefaults(&spec, defaults)
 
-	// Apply project-level overrides from project bead metadata.
+	// Apply project-level overrides and common config under read lock
+	// to prevent concurrent map read/write with refreshProjectCache.
+	cfg.ProjectCacheMu.RLock()
 	applyProjectDefaults(cfg, &spec)
+	applyCommonConfig(cfg, &spec)
+	cfg.ProjectCacheMu.RUnlock()
 
 	// Overlay event metadata for optional fields.
 	if sa := event.Metadata["service_account"]; sa != "" {
@@ -120,9 +127,6 @@ func buildAgentPodSpec(cfg *config.Config, event subscriber.Event) podmanager.Ag
 	if scenario := event.Metadata["mock_scenario"]; scenario != "" {
 		spec.Env["BOAT_COMMAND"] = fmt.Sprintf("claudeless --scenario /scenarios/%s.toml --dangerously-skip-permissions", scenario)
 	}
-
-	// Apply common config (credentials, daemon token, coop, NATS).
-	applyCommonConfig(cfg, &spec)
 
 	return spec
 }

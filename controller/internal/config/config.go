@@ -4,6 +4,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"gasboat/controller/internal/beadsapi"
@@ -172,8 +173,13 @@ type Config struct {
 
 	// --- Runtime (not from env) ---
 
+	// ProjectCacheMu protects ProjectCache for concurrent read/write access.
+	// The periodic sync goroutine writes via refreshProjectCache while the
+	// event loop goroutine reads via buildAgentPodSpec.
+	ProjectCacheMu sync.RWMutex
+
 	// ProjectCache maps project name → metadata, populated at runtime from project beads
-	// in the daemon. Not parsed from env.
+	// in the daemon. Not parsed from env. Protected by ProjectCacheMu.
 	ProjectCache map[string]ProjectCacheEntry
 }
 
