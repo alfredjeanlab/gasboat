@@ -301,3 +301,48 @@ func TestParse_LeaderElectionIdentity_DefaultsToHostname(t *testing.T) {
 		t.Errorf("LeaderElectionIdentity = %s, want hostname %s", cfg.LeaderElectionIdentity, expected)
 	}
 }
+
+func TestParse_SecretEnvVars(t *testing.T) {
+	t.Setenv("BEADS_TOKEN_SECRET", "beads-token")
+	t.Setenv("CLAUDE_OAUTH_SECRET", "claude-oauth")
+	t.Setenv("CLAUDE_OAUTH_TOKEN_SECRET", "claude-token")
+	t.Setenv("ANTHROPIC_API_KEY_SECRET", "anthropic-key")
+	t.Setenv("GIT_CREDENTIALS_SECRET", "git-creds")
+	t.Setenv("GITHUB_TOKEN_SECRET", "gh-token")
+	t.Setenv("GITLAB_TOKEN_SECRET", "gl-token")
+	t.Setenv("RWX_ACCESS_TOKEN_SECRET", "rwx-token")
+	t.Setenv("NATS_TOKEN_SECRET", "nats-token")
+	t.Setenv("COOPMUX_TOKEN_SECRET", "coopmux-token")
+
+	cfg := Parse()
+
+	checks := map[string]string{
+		"BeadsTokenSecret":       cfg.BeadsTokenSecret,
+		"ClaudeOAuthSecret":      cfg.ClaudeOAuthSecret,
+		"ClaudeOAuthTokenSecret": cfg.ClaudeOAuthTokenSecret,
+		"AnthropicApiKeySecret":  cfg.AnthropicApiKeySecret,
+		"GitCredentialsSecret":   cfg.GitCredentialsSecret,
+		"GithubTokenSecret":      cfg.GithubTokenSecret,
+		"GitlabTokenSecret":      cfg.GitlabTokenSecret,
+		"RwxAccessTokenSecret":   cfg.RwxAccessTokenSecret,
+		"NatsTokenSecret":        cfg.NatsTokenSecret,
+		"CoopmuxTokenSecret":     cfg.CoopmuxTokenSecret,
+	}
+	expected := map[string]string{
+		"BeadsTokenSecret":       "beads-token",
+		"ClaudeOAuthSecret":      "claude-oauth",
+		"ClaudeOAuthTokenSecret": "claude-token",
+		"AnthropicApiKeySecret":  "anthropic-key",
+		"GitCredentialsSecret":   "git-creds",
+		"GithubTokenSecret":      "gh-token",
+		"GitlabTokenSecret":      "gl-token",
+		"RwxAccessTokenSecret":   "rwx-token",
+		"NatsTokenSecret":        "nats-token",
+		"CoopmuxTokenSecret":     "coopmux-token",
+	}
+	for name, got := range checks {
+		if got != expected[name] {
+			t.Errorf("%s = %q, want %q", name, got, expected[name])
+		}
+	}
+}
