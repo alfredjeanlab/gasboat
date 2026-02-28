@@ -89,8 +89,11 @@ func (s *SSEStream) setLastID(id string) {
 }
 
 // On registers a handler for a specific SSE topic (e.g., "beads.bead.created").
+// Safe for concurrent use with dispatch.
 func (s *SSEStream) On(topic string, handler SSEHandler) {
+	s.mu.Lock()
 	s.handlers[topic] = append(s.handlers[topic], handler)
+	s.mu.Unlock()
 }
 
 // Start connects to the SSE endpoint and streams events to registered handlers.
@@ -221,8 +224,10 @@ func (s *SSEStream) readEvents(ctx context.Context, body io.Reader) error {
 // dispatch calls all registered handlers for the given topic.
 // If dedup is configured, events are deduplicated by bead ID + topic.
 func (s *SSEStream) dispatch(ctx context.Context, id, topic, data string) {
-	handlers, ok := s.handlers[topic]
-	if !ok {
+	s.mu.RLock()
+	handlers := s.handlers[topic]
+	s.mu.RUnlock()
+	if len(handlers) == 0 {
 		return
 	}
 

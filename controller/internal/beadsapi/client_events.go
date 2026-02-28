@@ -35,9 +35,8 @@ func (c *Client) EventStream(ctx context.Context, topics string) (<-chan SSEEven
 	}
 	req.Header.Set("Accept", "text/event-stream")
 
-	// Use a separate client with no timeout for SSE streams.
-	sseClient := &http.Client{}
-	resp, err := sseClient.Do(req)
+	// Use the dedicated SSE client (no timeout) for long-lived streams.
+	resp, err := c.sseClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to SSE stream: %w", err)
 	}

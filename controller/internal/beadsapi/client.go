@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -59,6 +60,7 @@ type Config struct {
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	sseClient  *http.Client // long-lived client with no timeout for SSE streams
 }
 
 // New creates an HTTP client for querying the beads daemon.
@@ -77,6 +79,7 @@ func New(cfg Config) (*Client, error) {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		sseClient: &http.Client{Timeout: 0},
 	}, nil
 }
 
@@ -334,14 +337,23 @@ func (c *Client) SpawnAgent(ctx context.Context, agentName, project, taskID, rol
 	if project != "" {
 		// Best-effort: label the agent bead with its project so it appears in
 		// project-scoped listings (kd list, gb ready with --project filter).
-		_ = c.AddLabel(ctx, id, "project:"+project)
+		if err := c.AddLabel(ctx, id, "project:"+project); err != nil {
+			slog.Warn("failed to add project label to agent bead",
+				"agent", agentName, "bead", id, "project", project, "error", err)
+		}
 	}
 	// Best-effort: add a role label so gb prime advice matching can filter by role.
-	_ = c.AddLabel(ctx, id, "role:"+role)
+	if err := c.AddLabel(ctx, id, "role:"+role); err != nil {
+		slog.Warn("failed to add role label to agent bead",
+			"agent", agentName, "bead", id, "role", role, "error", err)
+	}
 	if taskID != "" {
 		// Best-effort: failure to link the task does not prevent agent creation.
 		// The task reference is already captured in the bead description.
-		_ = c.AddDependency(ctx, id, taskID, "assigned", agentName)
+		if err := c.AddDependency(ctx, id, taskID, "assigned", agentName); err != nil {
+			slog.Warn("failed to add task dependency to agent bead",
+				"agent", agentName, "bead", id, "task", taskID, "error", err)
+		}
 	}
 	return id, nil
 }
