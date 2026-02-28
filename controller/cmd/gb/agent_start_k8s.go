@@ -167,14 +167,13 @@ func runAgentStartK8s(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 
-		// If the agent was rate-limited, park instead of restarting.
-		if isRateLimited() {
-			fmt.Printf("[gb agent start] agent was rate-limited — parking for 30 minutes before restart\n")
-			os.Remove("/tmp/.agent_rate_limited")
+		// If rate-limited, sleep until the reset time before restarting.
+		if sleepDur := rateLimitSleepDuration(); sleepDur > 0 {
+			fmt.Printf("[gb agent start] rate limited — sleeping %s before restart\n", sleepDur.Round(time.Second))
 			select {
 			case <-ctx.Done():
 				return nil
-			case <-time.After(30 * time.Minute):
+			case <-time.After(sleepDur):
 			}
 			restarts = 0
 			continue
@@ -273,4 +272,66 @@ func orStr(s, def string) string {
 		return s
 	}
 	return def
+}
+
+// rateLimitSleepDuration reads the sentinel file written by monitorAgentExit
+// when a rate limit is detected, parses the reset time from the message,
+// and returns how long to sleep. Returns 0 if no sentinel file exists.
+func rateLimitSleepDuration() time.Duration {
+	const sentinelPath = "/tmp/rate_limit_reset"
+	data, err := os.ReadFile(sentinelPath)
+	if err != nil {
+		return 0
+	}
+	os.Remove(sentinelPath)
+
+	msg := string(data)
+
+	// Extract reset hour from message (e.g., "resets 9pm (UTC)" -> "9pm").
+	dur := parseResetDuration(msg)
+	if dur > 0 {
+		return dur + time.Minute // buffer
+	}
+
+	// Fallback: sleep 30 minutes if we can't parse the reset time.
+	fmt.Printf("[gb agent start] could not parse reset time from: %s\n", msg)
+	return 30 * time.Minute
+}
+
+// parseResetDuration extracts a reset time like "9pm" from the rate limit
+// message and returns the duration until that time (UTC).
+func parseResetDuration(msg string) time.Duration {
+	// Look for patterns like "9pm", "10am", "12pm"
+	idx := strings.Index(msg, "resets ")
+	if idx < 0 {
+		return 0
+	}
+	rest := msg[idx+len("resets "):]
+
+	var hour int
+	var ampm string
+	n, _ := fmt.Sscanf(rest, "%d%s", &hour, &ampm)
+	if n < 2 || hour < 1 || hour > 12 {
+		return 0
+	}
+	ampm = strings.ToLower(strings.TrimSpace(ampm))
+	// Strip trailing non-alpha (e.g., "pm" from "pm (UTC)")
+	if strings.HasPrefix(ampm, "pm") {
+		if hour != 12 {
+			hour += 12
+		}
+	} else if strings.HasPrefix(ampm, "am") {
+		if hour == 12 {
+			hour = 0
+		}
+	} else {
+		return 0
+	}
+
+	now := time.Now().UTC()
+	target := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, time.UTC)
+	if target.Before(now) {
+		target = target.Add(24 * time.Hour)
+	}
+	return target.Sub(now)
 }

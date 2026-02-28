@@ -22,6 +22,16 @@ fi
 # Read stdin (Claude Code hook JSON) and forward to gb bus emit.
 # stderr flows through so Claude Code sees the block reason.
 _stdin=$(cat)
+
+# If the agent is rate-limited, it cannot create a decision checkpoint.
+# Allow the stop immediately to avoid an infinite block loop.
+_agent_state=$(curl -sf http://localhost:8080/api/v1/agent 2>/dev/null)
+_error_cat=$(echo "$_agent_state" | jq -r '.error_category // empty')
+if [ "$_error_cat" = "rate_limited" ]; then
+    echo '[stop-gate] Rate limited — allowing stop without checkpoint'
+    exit 0
+fi
+
 echo "$_stdin" | gb bus emit --hook=Stop
 _rc=$?
 

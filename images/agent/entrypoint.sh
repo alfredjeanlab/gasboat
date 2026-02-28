@@ -709,58 +709,21 @@ monitor_agent_exit() {
             curl -sf -X POST http://localhost:8080/api/v1/shutdown 2>/dev/null || true
             return 0
         fi
-        if [ "${agent_state}" = "error" ] && [ "${error_category}" = "rate_limited" ]; then
-            echo "[entrypoint] Agent hit rate limit (error_category=rate_limited), requesting coop shutdown"
+        # Detect rate-limited state and park the pod.
+        error_cat=$(echo "${state}" | jq -r '.error_category // empty' 2>/dev/null)
+        if [ "${error_cat}" = "rate_limited" ]; then
+            echo "[entrypoint] Agent rate-limited, dismissing prompt"
+            # Send Enter to select "Stop and wait" from /rate-limit-options.
+            curl -sf -X POST http://localhost:8080/api/v1/input/keys \
+                -H 'Content-Type: application/json' \
+                -d '{"keys":["Return"]}' 2>/dev/null || true
+            last_msg=$(echo "${state}" | jq -r '.last_message // empty' 2>/dev/null)
+            echo "[entrypoint] Rate limit info: ${last_msg}"
+            # Write sentinel so the restart loop knows to sleep until reset.
+            echo "${last_msg}" > /tmp/rate_limit_reset
+            sleep 2
+            echo "[entrypoint] Requesting coop shutdown (rate-limited)"
             curl -sf -X POST http://localhost:8080/api/v1/shutdown 2>/dev/null || true
-            # Signal rate-limited exit via marker file so the restart loop can park.
-            touch /tmp/.agent_rate_limited
-            return 0
-        fi
-    done
-}
-
-# ── Idle agent nudge ─────────────────────────────────────────────────────
-# Crew-mode agents that finish their task sit idle. This background loop
-# detects prolonged idle state and nudges the agent to pick up new work.
-monitor_agent_idle() {
-    local idle_threshold="${COOP_IDLE_NUDGE_SECS:-120}"
-    local poll_interval=10
-    local idle_since=0
-    local last_nudge=0
-
-    # Only nudge crew-mode agents; job-mode agents exit on completion.
-    if [ "${BOAT_MODE:-crew}" != "crew" ]; then
-        return 0
-    fi
-
-    sleep 30  # let agent settle after startup
-    while true; do
-        sleep "${poll_interval}"
-        state=$(curl -sf http://localhost:8080/api/v1/agent 2>/dev/null) || continue
-        agent_state=$(echo "${state}" | jq -r '.state // empty' 2>/dev/null)
-
-        if [ "${agent_state}" = "idle" ]; then
-            now=$(date +%s)
-            if [ "${idle_since}" -eq 0 ]; then
-                idle_since="${now}"
-            fi
-            idle_duration=$(( now - idle_since ))
-            since_last_nudge=$(( now - last_nudge ))
-
-            if [ "${idle_duration}" -ge "${idle_threshold}" ] && [ "${since_last_nudge}" -ge "${idle_threshold}" ]; then
-                echo "[entrypoint] Agent idle for ${idle_duration}s, nudging to check for new work"
-                curl -sf -X POST http://localhost:8080/api/v1/agent/nudge \
-                    -H 'Content-Type: application/json' \
-                    -d '{"message": "You have been idle. Run `gb ready` to check for new work, then `kd claim <id>` on any available task."}' \
-                    2>/dev/null || true
-                last_nudge="${now}"
-            fi
-        else
-            idle_since=0
-        fi
-
-        # Exit if agent has exited (monitor_agent_exit handles shutdown).
-        if [ "${agent_state}" = "exited" ]; then
             return 0
         fi
     done
@@ -918,12 +881,30 @@ while true; do
         fi
     fi
 
-    # If the agent exited due to rate limiting, park instead of restarting.
-    if [ -f /tmp/.agent_rate_limited ]; then
-        rm -f /tmp/.agent_rate_limited
-        echo "[entrypoint] Agent was rate-limited — parking pod for 30 minutes before restart"
-        sleep 1800
-        # Reset restart counter since this was a deliberate park, not a crash.
+    # If rate-limited, sleep until the reset time before restarting.
+    if [ -f /tmp/rate_limit_reset ]; then
+        rate_msg=$(cat /tmp/rate_limit_reset)
+        rm -f /tmp/rate_limit_reset
+        # Extract reset hour from message (e.g., "resets 9pm (UTC)" -> "9pm").
+        reset_hour=$(echo "${rate_msg}" | grep -oP '\d{1,2}(am|pm)' | head -1)
+        sleep_secs=""
+        if [ -n "${reset_hour}" ]; then
+            target_epoch=$(date -u -d "today ${reset_hour}" +%s 2>/dev/null) || true
+            now_epoch=$(date -u +%s)
+            if [ -n "${target_epoch}" ] && [ "${target_epoch}" -le "${now_epoch}" ]; then
+                target_epoch=$(date -u -d "tomorrow ${reset_hour}" +%s 2>/dev/null) || true
+            fi
+            if [ -n "${target_epoch}" ] && [ "${target_epoch}" -gt "${now_epoch}" ]; then
+                sleep_secs=$((target_epoch - now_epoch + 60))
+            fi
+        fi
+        if [ -n "${sleep_secs}" ]; then
+            echo "[entrypoint] Rate limited — sleeping ${sleep_secs}s until ${reset_hour} UTC"
+        else
+            sleep_secs=1800
+            echo "[entrypoint] Rate limited — sleeping ${sleep_secs}s (could not parse reset time)"
+        fi
+        sleep "${sleep_secs}"
         restart_count=0
         continue
     fi

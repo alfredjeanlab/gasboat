@@ -173,12 +173,20 @@ func monitorAgentExit(ctx context.Context, coopPort int) {
 			_, _ = client.Do(req) //nolint:errcheck // best-effort shutdown on exit
 			return
 		}
-		if agentState == "error" && errorCategory == "rate_limited" {
-			fmt.Printf("[gb agent start] agent hit rate limit (error_category=rate_limited), requesting coop shutdown\n")
+
+		// Detect rate-limited state and park the pod.
+		errorCat, _ := state["error_category"].(string)
+		if errorCat == "rate_limited" {
+			fmt.Printf("[gb agent start] agent rate-limited, dismissing prompt\n")
+			postKeys(client, base, "Return")
+			lastMsg, _ := state["last_message"].(string)
+			fmt.Printf("[gb agent start] rate limit info: %s\n", lastMsg)
+			// Write sentinel so the restart loop knows to sleep until reset.
+			_ = os.WriteFile("/tmp/rate_limit_reset", []byte(lastMsg), 0644)
+			time.Sleep(2 * time.Second)
+			fmt.Printf("[gb agent start] requesting coop shutdown (rate-limited)\n")
 			req, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/shutdown", nil)
 			_, _ = client.Do(req) //nolint:errcheck // best-effort shutdown on rate limit
-			// Write marker file so the restart loop can detect rate-limited exit.
-			_ = os.WriteFile("/tmp/.agent_rate_limited", []byte("rate_limited"), 0644)
 			return
 		}
 	}
