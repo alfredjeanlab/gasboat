@@ -26,7 +26,7 @@ type BeadClient interface {
 	FindAgentBead(ctx context.Context, agentName string) (*beadsapi.BeadDetail, error)
 	CloseBead(ctx context.Context, beadID string, fields map[string]string) error
 	CreateBead(ctx context.Context, req beadsapi.CreateBeadRequest) (string, error)
-	SpawnAgent(ctx context.Context, agentName, project, taskID, role string) (string, error)
+	SpawnAgent(ctx context.Context, agentName, project, taskID, role, customPrompt string) (string, error)
 	ListDecisionBeads(ctx context.Context) ([]*beadsapi.BeadDetail, error)
 	ListAgentBeads(ctx context.Context) ([]beadsapi.AgentBead, error)
 	ListProjectBeads(ctx context.Context) (map[string]beadsapi.ProjectInfo, error)

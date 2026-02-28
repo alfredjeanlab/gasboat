@@ -82,7 +82,7 @@ func (m *mockDaemon) CreateBead(_ context.Context, req beadsapi.CreateBeadReques
 	return id, nil
 }
 
-func (m *mockDaemon) SpawnAgent(_ context.Context, agentName, project, taskID, role string) (string, error) {
+func (m *mockDaemon) SpawnAgent(_ context.Context, agentName, project, taskID, role, customPrompt string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if role == "" {

@@ -33,7 +33,7 @@ func TestSpawnAgent_SendsCorrectRequest(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{baseURL: srv.URL, httpClient: srv.Client()}
-	id, err := c.SpawnAgent(context.Background(), "my-bot", "gasboat", "", "")
+	id, err := c.SpawnAgent(context.Background(), "my-bot", "gasboat", "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestSpawnAgent_CustomRole(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{baseURL: srv.URL, httpClient: srv.Client()}
-	_, err := c.SpawnAgent(context.Background(), "my-bot", "gasboat", "", "captain")
+	_, err := c.SpawnAgent(context.Background(), "my-bot", "gasboat", "", "captain", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestSpawnAgent_PropagatesCreateError(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{baseURL: srv.URL, httpClient: srv.Client()}
-	_, err := c.SpawnAgent(context.Background(), "bad-bot", "gasboat", "", "")
+	_, err := c.SpawnAgent(context.Background(), "bad-bot", "gasboat", "", "", "")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -190,7 +190,7 @@ func TestSpawnAgent_WithTaskID_SetsDescriptionAndLinksDependency(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{baseURL: srv.URL, httpClient: srv.Client()}
-	id, err := c.SpawnAgent(context.Background(), "my-bot", "gasboat", "kd-task-123", "")
+	id, err := c.SpawnAgent(context.Background(), "my-bot", "gasboat", "kd-task-123", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

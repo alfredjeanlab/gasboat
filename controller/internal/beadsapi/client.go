@@ -330,7 +330,10 @@ func (c *Client) CreateBead(ctx context.Context, req CreateBeadRequest) (string,
 // the agent bead description is set to reference the task and a dependency is added
 // (type "assigned") linking the agent bead to the task. The dependency is best-effort:
 // if it fails the agent bead is still returned.
-func (c *Client) SpawnAgent(ctx context.Context, agentName, project, taskID, role string) (string, error) {
+// customPrompt is an optional prompt string injected into the agent session at startup.
+// When non-empty, it is stored in the bead's "prompt" field and passed as BOAT_PROMPT
+// to the agent pod.
+func (c *Client) SpawnAgent(ctx context.Context, agentName, project, taskID, role, customPrompt string) (string, error) {
 	if role == "" {
 		role = "crew"
 	}
@@ -340,8 +343,8 @@ func (c *Client) SpawnAgent(ctx context.Context, agentName, project, taskID, rol
 		"role":    role,
 		"project": project,
 	}
-	if taskID != "" {
-		fields["task_id"] = taskID
+	if customPrompt != "" {
+		fields["prompt"] = customPrompt
 	}
 	fieldsJSON, err := json.Marshal(fields)
 	if err != nil {
@@ -354,6 +357,8 @@ func (c *Client) SpawnAgent(ctx context.Context, agentName, project, taskID, rol
 	}
 	if taskID != "" {
 		req.Description = "Assigned to task: " + taskID
+	} else if customPrompt != "" {
+		req.Description = customPrompt
 	}
 	id, err := c.CreateBead(ctx, req)
 	if err != nil {

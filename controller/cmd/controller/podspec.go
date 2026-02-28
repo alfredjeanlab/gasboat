@@ -75,6 +75,11 @@ func BuildSpecFromBeadInfo(cfg *config.Config, project, mode, role, agentName st
 		spec.Env["BOAT_COMMAND"] = fmt.Sprintf("claudeless --scenario /scenarios/%s.toml --dangerously-skip-permissions", scenario)
 	}
 
+	// Custom prompt: pass through to entrypoint for initial nudge message.
+	if prompt := metadata["prompt"]; prompt != "" {
+		spec.Env["BOAT_PROMPT"] = prompt
+	}
+
 	return spec
 }
 
@@ -129,6 +134,11 @@ func buildAgentPodSpec(cfg *config.Config, event subscriber.Event) podmanager.Ag
 	// Mock mode: override BOAT_COMMAND to run claudeless with a scenario file.
 	if scenario := event.Metadata["mock_scenario"]; scenario != "" {
 		spec.Env["BOAT_COMMAND"] = fmt.Sprintf("claudeless --scenario /scenarios/%s.toml --dangerously-skip-permissions", scenario)
+	}
+
+	// Custom prompt: pass through to entrypoint for initial nudge message.
+	if prompt := event.Metadata["prompt"]; prompt != "" {
+		spec.Env["BOAT_PROMPT"] = prompt
 	}
 
 	return spec

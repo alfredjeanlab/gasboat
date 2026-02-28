@@ -27,12 +27,14 @@ func (b *Bot) handleSlashCommand(ctx context.Context, cmd slack.SlashCommand) {
 }
 
 // handleSpawnCommand processes the /spawn slash command.
-// Usage: /spawn <agent> [project] [task] [--role <role>]
+// Usage: /spawn <agent> [project|"PROMPT TEXT"] [task] [--role <role>]
+// When the second argument is a quoted string, it is used as a custom prompt
+// for the agent instead of a project name.
 func (b *Bot) handleSpawnCommand(ctx context.Context, cmd slack.SlashCommand) {
-	args := strings.Fields(strings.TrimSpace(cmd.Text))
+	args := splitQuotedArgs(strings.TrimSpace(cmd.Text))
 	if len(args) == 0 {
 		_, _ = b.api.PostEphemeral(cmd.ChannelID, cmd.UserID,
-			slack.MsgOptionText(":x: Usage: `/spawn <agent> [project] [task] [--role <role>]`", false))
+			slack.MsgOptionText(":x: Usage: `/spawn <agent> [project|\"PROMPT TEXT\"] [task] [--role <role>]`", false))
 		return
 	}
 
@@ -58,8 +60,15 @@ func (b *Bot) handleSpawnCommand(ctx context.Context, cmd slack.SlashCommand) {
 	}
 
 	project := ""
+	customPrompt := ""
 	if len(positional) >= 2 {
-		project = positional[1]
+		arg2 := positional[1]
+		// Quoted strings are custom prompts, not project names.
+		if strings.Contains(arg2, " ") {
+			customPrompt = arg2
+		} else {
+			project = arg2
+		}
 	}
 
 	taskID := ""
@@ -83,15 +92,15 @@ func (b *Bot) handleSpawnCommand(ctx context.Context, cmd slack.SlashCommand) {
 		}
 	}
 
-	beadID, err := b.daemon.SpawnAgent(ctx, agentName, project, taskID, role)
+	beadID, err := b.daemon.SpawnAgent(ctx, agentName, project, taskID, role, customPrompt)
 	if err != nil {
-		b.logger.Error("failed to spawn agent", "agent", agentName, "project", project, "task", taskID, "role", role, "error", err)
+		b.logger.Error("failed to spawn agent", "agent", agentName, "project", project, "task", taskID, "role", role, "prompt", customPrompt, "error", err)
 		_, _ = b.api.PostEphemeral(cmd.ChannelID, cmd.UserID,
 			slack.MsgOptionText(fmt.Sprintf(":x: Failed to spawn agent %q: %s", agentName, err.Error()), false))
 		return
 	}
 
-	b.logger.Info("spawned agent via Slack", "agent", agentName, "project", project, "task", taskID, "role", role, "bead", beadID, "user", cmd.UserID)
+	b.logger.Info("spawned agent via Slack", "agent", agentName, "project", project, "task", taskID, "role", role, "prompt", customPrompt, "bead", beadID, "user", cmd.UserID)
 
 	text := fmt.Sprintf(":rocket: Spawning agent *%s*", agentName)
 	if project != "" {
@@ -103,9 +112,43 @@ func (b *Bot) handleSpawnCommand(ctx context.Context, cmd slack.SlashCommand) {
 	if taskID != "" {
 		text += fmt.Sprintf(" assigned to task `%s`", taskID)
 	}
+	if customPrompt != "" {
+		promptPreview := customPrompt
+		if len(promptPreview) > 60 {
+			promptPreview = promptPreview[:57] + "..."
+		}
+		text += fmt.Sprintf("\nPrompt: _%s_", promptPreview)
+	}
 	text += fmt.Sprintf("\nBead: `%s` · Use `/roster` to check status.", beadID)
 	_, _ = b.api.PostEphemeral(cmd.ChannelID, cmd.UserID,
 		slack.MsgOptionText(text, false))
+}
+
+// splitQuotedArgs splits a command string into arguments, respecting double-quoted
+// strings as single arguments. Quotes are stripped from the resulting tokens.
+// Example: `my-bot "fix the login bug" --role crew` → ["my-bot", "fix the login bug", "--role", "crew"]
+func splitQuotedArgs(s string) []string {
+	var args []string
+	var current strings.Builder
+	inQuotes := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		switch {
+		case ch == '"':
+			inQuotes = !inQuotes
+		case ch == ' ' && !inQuotes:
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteByte(ch)
+		}
+	}
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+	return args
 }
 
 // isValidAgentName reports whether s is a valid agent name.

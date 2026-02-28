@@ -394,7 +394,7 @@ func (s *Server) handleGenerateDispatch(w http.ResponseWriter, r *http.Request) 
 		agentName = "advgen-" + taskID[3:] // strip "kd-" prefix
 	}
 
-	agentID, err := s.daemon.SpawnAgent(r.Context(), agentName, project, taskID, "crew")
+	agentID, err := s.daemon.SpawnAgent(r.Context(), agentName, project, taskID, "crew", "")
 	if err != nil {
 		s.logger.Error("spawning agent for generation", "task", taskID, "error", err)
 		s.render(w, "generate.html", map[string]any{
