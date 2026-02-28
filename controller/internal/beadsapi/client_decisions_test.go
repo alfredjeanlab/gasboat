@@ -243,6 +243,23 @@ func TestResolveDecision_SendsCorrectRequest(t *testing.T) {
 	}
 }
 
+func TestResolveDecision_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"decision already resolved"}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client()}
+	err := c.ResolveDecision(context.Background(), "dec-456", ResolveDecisionRequest{
+		SelectedOption: "x",
+		RespondedBy:    "bot",
+	})
+	if err == nil {
+		t.Fatal("expected error for 500 response")
+	}
+}
+
 func TestCancelDecision_SendsCorrectRequest(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody map[string]string
