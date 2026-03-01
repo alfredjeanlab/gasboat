@@ -22,6 +22,7 @@ import (
 type JiraBeadClient interface {
 	CreateBead(ctx context.Context, req beadsapi.CreateBeadRequest) (string, error)
 	ListTaskBeads(ctx context.Context) ([]*beadsapi.BeadDetail, error)
+	AddDependency(ctx context.Context, beadID, dependsOnID, depType, createdBy string) error
 }
 
 // JiraPollerConfig holds configuration for the JIRA poller.
@@ -164,6 +165,24 @@ func (p *JiraPoller) poll(ctx context.Context) {
 		p.cfg.Logger.Info("created bead for JIRA issue",
 			"key", issue.Key, "bead_id", beadID,
 			"summary", issue.Fields.Summary)
+
+		// Link child issues to their parent epic via "child-of" dependency.
+		if issue.Fields.Parent != nil && issue.Fields.Parent.Key != "" {
+			p.mu.Lock()
+			epicBeadID, epicExists := p.tracked[issue.Fields.Parent.Key]
+			p.mu.Unlock()
+			if epicExists {
+				if err := p.daemon.AddDependency(ctx, beadID, epicBeadID, "child-of", "jira-bridge"); err != nil {
+					p.cfg.Logger.Warn("failed to add child-of dependency",
+						"child", beadID, "epic", epicBeadID,
+						"jira_epic", issue.Fields.Parent.Key, "error", err)
+				} else {
+					p.cfg.Logger.Info("linked child to epic",
+						"child", beadID, "epic", epicBeadID,
+						"jira_epic", issue.Fields.Parent.Key)
+				}
+			}
+		}
 	}
 
 	if created > 0 || p.cfg.Logger.Enabled(ctx, slog.LevelDebug) {
@@ -192,6 +211,12 @@ func (p *JiraPoller) createBeadFromIssue(ctx context.Context, issue JiraIssue) (
 		}
 		project = jiraPrefix
 		labels = append(labels, "project:"+boatProject)
+	}
+
+	// Tag epics for easy filtering.
+	isEpic := issue.Fields.IssueType != nil && issue.Fields.IssueType.Name == "Epic"
+	if isEpic {
+		labels = append(labels, "jira-epic")
 	}
 
 	// Add JIRA labels with prefix.
@@ -223,9 +248,11 @@ func (p *JiraPoller) createBeadFromIssue(ctx context.Context, issue JiraIssue) (
 		return "", fmt.Errorf("marshal fields: %w", err)
 	}
 
-	// Map priority.
+	// Map priority. Epics get priority=1 (high) since they're higher-level.
 	priority := 2 // default medium
-	if issue.Fields.Priority != nil {
+	if isEpic {
+		priority = 1
+	} else if issue.Fields.Priority != nil {
 		priority = MapJiraPriority(issue.Fields.Priority.Name)
 	}
 

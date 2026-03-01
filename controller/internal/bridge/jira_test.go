@@ -17,7 +17,15 @@ import (
 type mockJiraDaemon struct {
 	mu     sync.Mutex
 	beads  map[string]*beadsapi.BeadDetail
+	deps   []mockDep // recorded dependency additions
 	nextID int
+}
+
+type mockDep struct {
+	BeadID      string
+	DependsOnID string
+	Type        string
+	CreatedBy   string
 }
 
 func newMockJiraDaemon() *mockJiraDaemon {
@@ -43,6 +51,13 @@ func (m *mockJiraDaemon) CreateBead(_ context.Context, req beadsapi.CreateBeadRe
 		Fields:      fields,
 	}
 	return id, nil
+}
+
+func (m *mockJiraDaemon) AddDependency(_ context.Context, beadID, dependsOnID, depType, createdBy string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deps = append(m.deps, mockDep{BeadID: beadID, DependsOnID: dependsOnID, Type: depType, CreatedBy: createdBy})
+	return nil
 }
 
 func (m *mockJiraDaemon) ListTaskBeads(_ context.Context) ([]*beadsapi.BeadDetail, error) {
@@ -280,6 +295,136 @@ func TestMapJiraPriority(t *testing.T) {
 				t.Errorf("MapJiraPriority(%q) = %d, want %d", tt.name, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestJiraPoller_EpicImport(t *testing.T) {
+	jiraServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"issues": []map[string]any{{
+				"key": "PE-5000", "id": "5000",
+				"fields": map[string]any{
+					"summary":   "Upload Epic",
+					"status":    map[string]string{"name": "To Do"},
+					"issuetype": map[string]string{"name": "Epic"},
+					"priority":  map[string]string{"name": "Medium"},
+				},
+			}},
+			"total": 1,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer jiraServer.Close()
+
+	daemon := newMockJiraDaemon()
+	poller := NewJiraPoller(newTestJiraClient(jiraServer.URL), daemon, JiraPollerConfig{
+		Projects:   []string{"PE"},
+		IssueTypes: []string{"Epic"},
+		ProjectMap: map[string]string{"PE": "monorepo"},
+		Logger:     slog.Default(),
+	})
+	poller.poll(context.Background())
+
+	beads := daemon.getBeads()
+	if len(beads) != 1 {
+		t.Fatalf("expected 1 bead, got %d", len(beads))
+	}
+	var bead *beadsapi.BeadDetail
+	for _, b := range beads {
+		bead = b
+	}
+	// Epics get jira-epic label.
+	hasEpicLabel := false
+	for _, l := range bead.Labels {
+		if l == "jira-epic" {
+			hasEpicLabel = true
+		}
+	}
+	if !hasEpicLabel {
+		t.Errorf("expected jira-epic label, got %v", bead.Labels)
+	}
+	// Epics get priority=1 regardless of JIRA priority.
+	if bead.Fields["_priority"] != "1" {
+		t.Errorf("priority=%s, want 1 for epic", bead.Fields["_priority"])
+	}
+	if bead.Fields["jira_type"] != "Epic" {
+		t.Errorf("jira_type=%s, want Epic", bead.Fields["jira_type"])
+	}
+}
+
+func TestJiraPoller_ChildOfDependency(t *testing.T) {
+	callCount := 0
+	jiraServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var issues []map[string]any
+		if callCount == 1 {
+			// First poll: return the epic.
+			issues = []map[string]any{{
+				"key": "PE-5000", "id": "5000",
+				"fields": map[string]any{
+					"summary": "Upload Epic", "status": map[string]string{"name": "To Do"},
+					"issuetype": map[string]string{"name": "Epic"}, "priority": map[string]string{"name": "Medium"},
+				},
+			}}
+		} else {
+			// Second poll: return a child issue referencing the epic.
+			issues = []map[string]any{{
+				"key": "PE-7001", "id": "7001",
+				"fields": map[string]any{
+					"summary": "Child task", "status": map[string]string{"name": "To Do"},
+					"issuetype": map[string]string{"name": "Task"}, "priority": map[string]string{"name": "Medium"},
+					"parent":    map[string]any{"key": "PE-5000"},
+				},
+			}}
+		}
+		resp := map[string]any{"issues": issues, "total": len(issues)}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer jiraServer.Close()
+
+	daemon := newMockJiraDaemon()
+	poller := NewJiraPoller(newTestJiraClient(jiraServer.URL), daemon, JiraPollerConfig{
+		Projects:   []string{"PE"},
+		IssueTypes: []string{"Epic", "Task"},
+		Logger:     slog.Default(),
+	})
+
+	// First poll creates the epic bead.
+	poller.poll(context.Background())
+	// Second poll creates the child bead and links it.
+	poller.poll(context.Background())
+
+	beads := daemon.getBeads()
+	if len(beads) != 2 {
+		t.Fatalf("expected 2 beads, got %d", len(beads))
+	}
+
+	daemon.mu.Lock()
+	deps := daemon.deps
+	daemon.mu.Unlock()
+
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 dependency, got %d", len(deps))
+	}
+	dep := deps[0]
+	if dep.Type != "child-of" {
+		t.Errorf("dep type=%s, want child-of", dep.Type)
+	}
+	if dep.CreatedBy != "jira-bridge" {
+		t.Errorf("dep created_by=%s, want jira-bridge", dep.CreatedBy)
+	}
+
+	// The child bead should depend on the epic bead.
+	var epicBeadID string
+	for _, b := range beads {
+		if b.Fields["jira_key"] == "PE-5000" {
+			epicBeadID = b.ID
+		}
+	}
+	if dep.DependsOnID != epicBeadID {
+		t.Errorf("dep depends_on=%s, want epic bead %s", dep.DependsOnID, epicBeadID)
 	}
 }
 

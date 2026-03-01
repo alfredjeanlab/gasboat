@@ -192,7 +192,7 @@ func parseConfig() *config {
 		jiraAPIToken:           os.Getenv("JIRA_API_TOKEN"),
 		jiraProjects:           splitCSV(envOrDefault("JIRA_PROJECTS", "PE,DEVOPS")),
 		jiraStatuses:           splitCSV(envOrDefault("JIRA_STATUSES", "To Do,Ready for Development")),
-		jiraIssueTypes:         splitCSV(envOrDefault("JIRA_ISSUE_TYPES", "Bug,Task,Story")),
+		jiraIssueTypes:         splitCSV(envOrDefault("JIRA_ISSUE_TYPES", "Bug,Task,Story,Epic")),
 		jiraProjectMap:         parseBoatProjects(os.Getenv("BOAT_PROJECTS")),
 		jiraPollInterval:       pollInterval,
 		jiraDisableTransitions: disableTransitions == "true" || disableTransitions == "1",
