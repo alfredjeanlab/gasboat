@@ -110,7 +110,7 @@ data:
       <div class="grid">
         {{- if .Values.beads3d.enabled }}
         <div class="card">
-          <h2>{{- if .Values.beads3d.ingress.host }}<a href="https://{{ .Values.beads3d.ingress.host }}">Beads 3D</a>{{- else }}Beads 3D{{- end }}</h2>
+          <h2>{{- if .Values.beads3d.ingress.host }}<a href="https://{{ .Values.beads3d.ingress.host }}{{ .Values.beads3d.ingress.pathPrefix }}">Beads 3D</a>{{- else }}Beads 3D{{- end }}</h2>
           <p>Interactive 3D visualization of beads issues.</p>
         </div>
         {{- end }}

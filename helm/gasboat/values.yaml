@@ -409,6 +409,9 @@ beads:
   ingress:
     enabled: false
     host: ""
+    # Path prefix for the beads API (e.g. "/beads"). Traefik strips
+    # the prefix before forwarding to the daemon.
+    pathPrefix: ""
     ipWhitelist:
       enabled: false
       sourceRange: []
@@ -675,6 +678,10 @@ beads3d:
   ingress:
     enabled: false
     host: ""
+    # Path prefix for Beads 3D (e.g. "/3d"). Traefik strips the prefix
+    # before forwarding to nginx. Use this to host beads3d on a shared
+    # domain alongside other gasboat web UIs.
+    pathPrefix: ""
     ipWhitelist:
       enabled: false
       sourceRange: []

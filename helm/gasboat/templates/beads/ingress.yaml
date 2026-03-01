@@ -2,6 +2,7 @@
 {{- $fullname := include "gasboat.beads.fullname" . -}}
 {{- $host := .Values.beads.ingress.host -}}
 {{- $httpPort := .Values.beads.service.httpPort | default 8080 -}}
+{{- $pathPrefix := .Values.beads.ingress.pathPrefix | default "" -}}
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -14,13 +15,16 @@ spec:
     - web
     - websecure
   routes:
-    - match: Host(`{{ $host }}`)
+    - match: Host(`{{ $host }}`){{ if $pathPrefix }} && PathPrefix(`{{ $pathPrefix }}`){{ end }}
       kind: Rule
       services:
         - name: {{ $fullname }}
           port: {{ $httpPort }}
-      {{- if or .Values.beads.ingress.ipWhitelist.enabled .Values.beads.ingress.rateLimit.enabled }}
+      {{- if or $pathPrefix .Values.beads.ingress.ipWhitelist.enabled .Values.beads.ingress.rateLimit.enabled }}
       middlewares:
+        {{- if $pathPrefix }}
+        - name: {{ $fullname }}-stripprefix
+        {{- end }}
         {{- if .Values.beads.ingress.ipWhitelist.enabled }}
         - name: {{ $fullname }}-ipwhitelist
         {{- end }}
@@ -32,6 +36,20 @@ spec:
   tls:
     secretName: {{ include "gasboat.fullname" . }}-wildcard-tls
   {{- end }}
+{{- if $pathPrefix }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ $fullname }}-stripprefix
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gasboat.beads.labels" . | nindent 4 }}
+spec:
+  stripPrefix:
+    prefixes:
+      - {{ $pathPrefix }}
+{{- end }}
 {{- if .Values.beads.ingress.ipWhitelist.enabled }}
 ---
 apiVersion: traefik.io/v1alpha1
