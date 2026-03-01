@@ -646,6 +646,7 @@ beads3d:
   # When empty and externalSecret is enabled, defaults to "{release}-beads3d-daemon-token".
   daemonTokenSecret: ""
 
+
   # ExternalSecret for beads daemon auth token (creates a K8s Secret from AWS Secrets Manager)
   externalSecret:
     enabled: false
