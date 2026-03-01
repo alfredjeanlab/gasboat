@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -173,6 +174,109 @@ func (c *GitHubClient) GetUnreleased(ctx context.Context, repo RepoRef, branch s
 		})
 	}
 	return result
+}
+
+// ghPackageVersion is a version from the GitHub Packages API.
+type ghPackageVersion struct {
+	ID       int    `json:"id"`
+	Name     string `json:"name"` // For containers, this is the digest.
+	Metadata struct {
+		PackageType string `json:"package_type"`
+		Container   struct {
+			Tags []string `json:"tags"`
+		} `json:"container"`
+	} `json:"metadata"`
+}
+
+// GetCommitForDigest maps a GHCR image digest to the git commit SHA that
+// produced it. It queries the GitHub Packages API for the container version
+// matching the digest, then extracts the commit from sha-<hex> convention tags
+// (set by docker/metadata-action during CI builds).
+//
+// imageRef is the image name (e.g., "ghcr.io/groblegark/gasboat" or
+// "ghcr.io/groblegark/gasboat:latest"). The tag/digest suffix is stripped.
+// digest is the registry content digest (e.g., "sha256:abc123...").
+func (c *GitHubClient) GetCommitForDigest(ctx context.Context, imageRef, digest string) (string, error) {
+	org, pkg, err := parseGHCRImageRef(imageRef)
+	if err != nil {
+		return "", err
+	}
+
+	// Paginate through package versions to find the matching digest.
+	// Cap at 5 pages (500 versions) to avoid runaway requests.
+	for page := 1; page <= 5; page++ {
+		url := fmt.Sprintf("%s/orgs/%s/packages/container/%s/versions?per_page=100&page=%d",
+			c.baseURL, org, pkg, page)
+		var versions []ghPackageVersion
+		if err := c.doJSON(ctx, url, &versions); err != nil {
+			return "", fmt.Errorf("list package versions: %w", err)
+		}
+		if len(versions) == 0 {
+			break
+		}
+
+		for _, v := range versions {
+			if v.Name != digest {
+				continue
+			}
+			// Found the version. Look for a sha-<hex> tag.
+			for _, tag := range v.Metadata.Container.Tags {
+				if sha, ok := strings.CutPrefix(tag, "sha-"); ok && isHexString(sha) {
+					return sha, nil
+				}
+			}
+			return "", fmt.Errorf("digest %s found in %s/%s but has no sha-* commit tag",
+				shortDigest(digest), org, pkg)
+		}
+	}
+
+	return "", fmt.Errorf("no package version matches digest %s in %s/%s",
+		shortDigest(digest), org, pkg)
+}
+
+// parseGHCRImageRef extracts the org and package name from a GHCR image
+// reference like "ghcr.io/groblegark/gasboat" or "ghcr.io/groblegark/gasboat:latest".
+func parseGHCRImageRef(imageRef string) (org, pkg string, err error) {
+	ref := imageRef
+	// Strip tag suffix (e.g., ":latest").
+	if i := strings.LastIndex(ref, ":"); i > 0 {
+		if !strings.Contains(ref[i+1:], "/") {
+			ref = ref[:i]
+		}
+	}
+	// Strip digest suffix (e.g., "@sha256:...").
+	if i := strings.Index(ref, "@"); i > 0 {
+		ref = ref[:i]
+	}
+
+	// Expected format: "ghcr.io/org/package".
+	parts := strings.SplitN(ref, "/", 3)
+	if len(parts) != 3 || parts[1] == "" || parts[2] == "" {
+		return "", "", fmt.Errorf("invalid GHCR image reference %q: expected ghcr.io/<org>/<package>", imageRef)
+	}
+	return parts[1], parts[2], nil
+}
+
+// isHexString reports whether s is a non-empty string of hexadecimal digits.
+func isHexString(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// shortDigest returns a truncated digest for error messages.
+func shortDigest(digest string) string {
+	d := strings.TrimPrefix(digest, "sha256:")
+	if len(d) > 12 {
+		return "sha256:" + d[:12] + "..."
+	}
+	return digest
 }
 
 // doJSON performs a GET request and decodes the JSON response.

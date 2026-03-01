@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -289,6 +290,141 @@ func TestCalverKey(t *testing.T) {
 		}
 		if ok && (y != tc.wantY || d != tc.wantD || b != tc.wantB) {
 			t.Errorf("calverKey(%q) = (%d,%d,%d), want (%d,%d,%d)", tc.tag, y, d, b, tc.wantY, tc.wantD, tc.wantB)
+		}
+	}
+}
+
+func TestGetCommitForDigest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/orgs/groblegark/packages/container/gasboat/versions" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[
+			{"id":1,"name":"sha256:olddigest000000","metadata":{"package_type":"container","container":{"tags":["v1.0.0"]}}},
+			{"id":2,"name":"sha256:abc123def456789","metadata":{"package_type":"container","container":{"tags":["latest","sha-deadbeef1234567"]}}}
+		]`))
+	}))
+	defer srv.Close()
+
+	client := newTestGitHubClient(srv.URL, "test-token")
+	sha, err := client.GetCommitForDigest(context.Background(),
+		"ghcr.io/groblegark/gasboat", "sha256:abc123def456789")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sha != "deadbeef1234567" {
+		t.Errorf("got SHA %q, want deadbeef1234567", sha)
+	}
+}
+
+func TestGetCommitForDigest_WithTag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/orgs/org/packages/container/repo/versions" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[
+			{"id":1,"name":"sha256:aaa111","metadata":{"package_type":"container","container":{"tags":["latest","sha-abcdef0"]}}}
+		]`))
+	}))
+	defer srv.Close()
+
+	client := newTestGitHubClient(srv.URL, "tok")
+	sha, err := client.GetCommitForDigest(context.Background(),
+		"ghcr.io/org/repo:latest", "sha256:aaa111")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sha != "abcdef0" {
+		t.Errorf("got SHA %q, want abcdef0", sha)
+	}
+}
+
+func TestGetCommitForDigest_NoMatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[
+			{"id":1,"name":"sha256:other","metadata":{"package_type":"container","container":{"tags":["v1.0.0"]}}}
+		]`))
+	}))
+	defer srv.Close()
+
+	client := newTestGitHubClient(srv.URL, "tok")
+	_, err := client.GetCommitForDigest(context.Background(),
+		"ghcr.io/org/repo", "sha256:notfound")
+	if err == nil {
+		t.Fatal("expected error for unmatched digest")
+	}
+	if !strings.Contains(err.Error(), "no package version matches") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestGetCommitForDigest_NoSHATag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[
+			{"id":1,"name":"sha256:abc123","metadata":{"package_type":"container","container":{"tags":["latest","v2.0.0"]}}}
+		]`))
+	}))
+	defer srv.Close()
+
+	client := newTestGitHubClient(srv.URL, "tok")
+	_, err := client.GetCommitForDigest(context.Background(),
+		"ghcr.io/org/repo", "sha256:abc123")
+	if err == nil {
+		t.Fatal("expected error for missing sha-* tag")
+	}
+	if !strings.Contains(err.Error(), "no sha-* commit tag") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParseGHCRImageRef(t *testing.T) {
+	tests := []struct {
+		input   string
+		wantOrg string
+		wantPkg string
+		wantErr bool
+	}{
+		{"ghcr.io/groblegark/gasboat", "groblegark", "gasboat", false},
+		{"ghcr.io/groblegark/kbeads:latest", "groblegark", "kbeads", false},
+		{"ghcr.io/groblegark/coop:v1.0.0", "groblegark", "coop", false},
+		{"ghcr.io/groblegark/gasboat@sha256:abc", "groblegark", "gasboat", false},
+		{"invalid", "", "", true},
+		{"ghcr.io/onlytwo", "", "", true},
+	}
+	for _, tt := range tests {
+		org, pkg, err := parseGHCRImageRef(tt.input)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("parseGHCRImageRef(%q): err=%v, wantErr=%v", tt.input, err, tt.wantErr)
+			continue
+		}
+		if org != tt.wantOrg || pkg != tt.wantPkg {
+			t.Errorf("parseGHCRImageRef(%q) = (%q, %q), want (%q, %q)",
+				tt.input, org, pkg, tt.wantOrg, tt.wantPkg)
+		}
+	}
+}
+
+func TestIsHexString(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"deadbeef", true},
+		{"abc123", true},
+		{"ABC123", true},
+		{"", false},
+		{"ghijkl", false},
+		{"sha-abc", false},
+	}
+	for _, tt := range tests {
+		if got := isHexString(tt.input); got != tt.want {
+			t.Errorf("isHexString(%q) = %v, want %v", tt.input, got, tt.want)
 		}
 	}
 }
