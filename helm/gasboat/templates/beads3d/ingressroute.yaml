@@ -2,7 +2,7 @@
 {{- $fullname := include "gasboat.beads3d.fullname" . -}}
 {{- $host := .Values.beads3d.ingress.host -}}
 {{- $port := .Values.beads3d.service.port | default 80 -}}
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: {{ $fullname }}
@@ -31,7 +31,7 @@ spec:
       {{- end }}
 {{- if .Values.beads3d.ingress.ipWhitelist.enabled }}
 ---
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: {{ $fullname }}-ipwhitelist
@@ -47,7 +47,7 @@ spec:
 {{- end }}
 {{- if .Values.beads3d.ingress.basicAuth.enabled }}
 ---
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: {{ $fullname }}-basicauth

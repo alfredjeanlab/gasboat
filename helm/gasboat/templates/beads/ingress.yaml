@@ -2,7 +2,7 @@
 {{- $fullname := include "gasboat.beads.fullname" . -}}
 {{- $host := .Values.beads.ingress.host -}}
 {{- $httpPort := .Values.beads.service.httpPort | default 8080 -}}
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: {{ $fullname }}
@@ -30,7 +30,7 @@ spec:
       {{- end }}
 {{- if .Values.beads.ingress.ipWhitelist.enabled }}
 ---
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: {{ $fullname }}-ipwhitelist
@@ -46,7 +46,7 @@ spec:
 {{- end }}
 {{- if .Values.beads.ingress.rateLimit.enabled }}
 ---
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: {{ $fullname }}-ratelimit

@@ -3,7 +3,7 @@
 {{- $host := .Values.slackBridge.ingress.host -}}
 {{- $port := .Values.slackBridge.service.port | default 8090 -}}
 {{- $pathPrefix := .Values.slackBridge.ingress.pathPrefix | default "" -}}
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: {{ $fullname }}
@@ -34,7 +34,7 @@ spec:
         {{- end }}
 {{- if $pathPrefix }}
 ---
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: {{ $fullname }}-stripprefix
@@ -49,7 +49,7 @@ spec:
 {{- end }}
 {{- if .Values.slackBridge.ingress.ipWhitelist.enabled }}
 ---
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: {{ $fullname }}-ipwhitelist
@@ -66,7 +66,7 @@ spec:
 {{- end }}
 {{- if .Values.slackBridge.ingress.basicAuth.enabled }}
 ---
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: {{ $fullname }}-basicauth

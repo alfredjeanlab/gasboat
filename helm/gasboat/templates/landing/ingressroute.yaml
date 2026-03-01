@@ -2,7 +2,7 @@
 {{- $fullname := include "gasboat.landing.fullname" . -}}
 {{- $host := .Values.landing.ingress.host -}}
 {{- $port := .Values.landing.service.port | default 80 -}}
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: {{ $fullname }}
@@ -31,7 +31,7 @@ spec:
       {{- end }}
 {{- if .Values.landing.ingress.ipWhitelist.enabled }}
 ---
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: {{ $fullname }}-ipwhitelist
@@ -47,7 +47,7 @@ spec:
 {{- end }}
 {{- if .Values.landing.ingress.basicAuth.enabled }}
 ---
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: {{ $fullname }}-basicauth

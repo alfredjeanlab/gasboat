@@ -5,7 +5,7 @@
 # Coopmux Ingress — exposes mux dashboard, WebSocket, sessions API, and
 # credential API. Basic auth protects browser-facing routes; bearer token
 # is injected after basic auth so coopmux's auth layer is satisfied.
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: {{ $fullname }}
@@ -57,7 +57,7 @@ spec:
 {{- if .Values.coopmux.ingress.bearerToken }}
 ---
 # Injects bearer token so coopmux's auth layer is satisfied after basic auth.
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: {{ $fullname }}-inject-bearer
@@ -71,7 +71,7 @@ spec:
 {{- end }}
 {{- if .Values.coopmux.ingress.ipWhitelist.enabled }}
 ---
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: {{ $fullname }}-ipwhitelist
@@ -87,7 +87,7 @@ spec:
 {{- end }}
 {{- if .Values.coopmux.ingress.basicAuth.enabled }}
 ---
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: {{ $fullname }}-basicauth
@@ -100,7 +100,7 @@ spec:
 {{- end }}
 {{- if .Values.coopmux.ingress.rateLimit.enabled }}
 ---
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: {{ $fullname }}-ratelimit
