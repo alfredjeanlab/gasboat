@@ -659,6 +659,7 @@ tasks:
       curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -o $OUT/usr/local/bin/yq &
       curl -fsSL "https://github.com/stern/stern/releases/download/v1.30.0/stern_1.30.0_linux_amd64.tar.gz" -o /tmp/stern.tar.gz &
       curl -fsSL "https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64" -o $OUT/usr/local/bin/hadolint &
+      curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v0.23.0/rtk-x86_64-unknown-linux-musl.tar.gz" -o /tmp/rtk.tar.gz &
       wait
 
       # --- Phase 3: Extract archives (sequential, fast) ----------------
@@ -668,10 +669,12 @@ tasks:
       tar -xz -C $OUT/usr/local/bin claudeless < /tmp/claudeless.tar.gz
       unzip -q /tmp/terraform.zip -d $OUT/usr/local/bin && rm /tmp/terraform.zip
       tar -xz -C $OUT/usr/local/bin stern < /tmp/stern.tar.gz
+      tar -xz -C $OUT/usr/local/bin rtk < /tmp/rtk.tar.gz
 
       chmod +x $OUT/usr/local/bin/kubectl $OUT/usr/local/bin/rwx \
         $OUT/usr/local/bin/claudeless $OUT/usr/local/bin/terragrunt \
-        $OUT/usr/local/bin/yq $OUT/usr/local/bin/hadolint
+        $OUT/usr/local/bin/yq $OUT/usr/local/bin/hadolint \
+        $OUT/usr/local/bin/rtk
 
       # AWS CLI (requires install script)
       unzip -q /tmp/awscli.zip -d /tmp

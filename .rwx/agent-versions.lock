@@ -24,3 +24,4 @@ terragrunt=0.77.11
 golangci-lint=v1.64.8
 stern=1.30.0
 claudeless=v0.4.0
+rtk=v0.23.0
