@@ -63,6 +63,12 @@ func (p *DecisionSSEProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	p.logger.Debug("decision SSE proxy connected")
 
+	// Send an SSE comment to push data through any intermediate proxy
+	// buffers (e.g. Traefik). Without this, the browser's EventSource
+	// won't fire onopen until the first real event arrives.
+	fmt.Fprintf(w, ": connected\n\n")
+	flusher.Flush()
+
 	for {
 		select {
 		case <-ctx.Done():
