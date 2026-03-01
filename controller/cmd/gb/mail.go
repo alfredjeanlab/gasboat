@@ -179,6 +179,9 @@ func printMailDetail(b *beadsapi.BeadDetail) {
 	fmt.Printf("From:    %s\n", sender)
 	fmt.Printf("To:      %s\n", b.Assignee)
 	fmt.Printf("Subject: %s\n", b.Title)
+	if b.Description != "" {
+		fmt.Printf("Body:    %s\n", b.Description)
+	}
 	fmt.Printf("ID:      %s\n", b.ID)
 }
 
