@@ -64,8 +64,10 @@ type JiraIssueFields struct {
 	Assignee    *JiraUser       `json:"assignee"`
 	Labels      []string        `json:"labels"`
 	Parent      *JiraParentRef  `json:"parent"` // epic link
-	Created     string          `json:"created"`
-	Updated     string          `json:"updated"`
+	Created     string           `json:"created"`
+	Updated     string           `json:"updated"`
+	IssueLinks  []JiraIssueLink  `json:"issuelinks"`
+	Attachments []JiraAttachment `json:"attachment"`
 }
 
 // JiraNamedRef is a JIRA object with a name field (status, priority, issuetype).
@@ -85,6 +87,36 @@ type JiraParentRef struct {
 	Fields struct {
 		Summary string `json:"summary"`
 	} `json:"fields"`
+}
+
+// JiraIssueLink represents a link between two JIRA issues.
+type JiraIssueLink struct {
+	Type         JiraLinkType   `json:"type"`
+	InwardIssue  *JiraLinkedRef `json:"inwardIssue,omitempty"`
+	OutwardIssue *JiraLinkedRef `json:"outwardIssue,omitempty"`
+}
+
+// JiraLinkType describes the semantics of an issue link.
+type JiraLinkType struct {
+	Name    string `json:"name"`
+	Inward  string `json:"inward"`
+	Outward string `json:"outward"`
+}
+
+// JiraLinkedRef is a minimal reference to a linked issue.
+type JiraLinkedRef struct {
+	Key string `json:"key"`
+}
+
+// JiraAttachment represents a JIRA issue attachment.
+type JiraAttachment struct {
+	ID        string `json:"id"`
+	Filename  string `json:"filename"`
+	MimeType  string `json:"mimeType"`
+	Size      int64  `json:"size"`
+	Content   string `json:"content"`
+	Thumbnail string `json:"thumbnail"`
+	Created   string `json:"created"`
 }
 
 // jiraTransition represents a JIRA issue transition.
@@ -422,6 +454,26 @@ func MapJiraPriority(name string) int {
 		return 3
 	default:
 		return 2
+	}
+}
+
+// MapJiraLinkType maps JIRA issue link type names to canonical dependency types.
+func MapJiraLinkType(name string) string {
+	switch strings.ToLower(name) {
+	case "blocks":
+		return "blocks"
+	case "relates":
+		return "relates"
+	case "duplicate":
+		return "duplicate"
+	case "action item":
+		return "action-item"
+	case "escalate":
+		return "escalate"
+	case "cloners":
+		return "clones"
+	default:
+		return "jira-link"
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 type JiraBeadClient interface {
 	CreateBead(ctx context.Context, req beadsapi.CreateBeadRequest) (string, error)
 	ListTaskBeads(ctx context.Context) ([]*beadsapi.BeadDetail, error)
+	AddDependency(ctx context.Context, beadID, dependsOnID, depType, createdBy string) error
 }
 
 // JiraPollerConfig holds configuration for the JIRA poller.
@@ -40,8 +41,9 @@ type JiraPoller struct {
 	daemon JiraBeadClient
 	cfg    JiraPollerConfig
 
-	mu      sync.Mutex
-	tracked map[string]string // JIRA key → bead ID
+	mu        sync.Mutex
+	tracked   map[string]string // JIRA key → bead ID
+	wiredDeps map[string]bool   // "src:dst:type" dedup
 }
 
 // NewJiraPoller creates a new JIRA polling loop.
@@ -50,10 +52,11 @@ func NewJiraPoller(jira *JiraClient, daemon JiraBeadClient, cfg JiraPollerConfig
 		cfg.PollInterval = 60 * time.Second
 	}
 	return &JiraPoller{
-		jira:    jira,
-		daemon:  daemon,
-		cfg:     cfg,
-		tracked: make(map[string]string),
+		jira:      jira,
+		daemon:    daemon,
+		cfg:       cfg,
+		tracked:   make(map[string]string),
+		wiredDeps: make(map[string]bool),
 	}
 }
 
@@ -129,7 +132,7 @@ func (p *JiraPoller) poll(ctx context.Context) {
 	}
 
 	jql := p.buildJQL()
-	fields := []string{"summary", "description", "status", "issuetype", "priority", "reporter", "labels", "parent", "created", "updated"}
+	fields := []string{"summary", "description", "status", "issuetype", "priority", "reporter", "labels", "parent", "created", "updated", "issuelinks", "attachment"}
 
 	issues, err := p.jira.SearchIssues(ctx, jql, fields, 50)
 	if err != nil {
@@ -166,6 +169,9 @@ func (p *JiraPoller) poll(ctx context.Context) {
 			"summary", issue.Fields.Summary)
 	}
 
+	// Second pass: wire dependencies now that all beads from this batch exist.
+	p.wireDependencies(ctx, issues)
+
 	if created > 0 || p.cfg.Logger.Enabled(ctx, slog.LevelDebug) {
 		p.cfg.Logger.Info("JIRA poll complete",
 			"found", len(issues), "created", created, "skipped", skipped)
@@ -199,6 +205,11 @@ func (p *JiraPoller) createBeadFromIssue(ctx context.Context, issue JiraIssue) (
 		labels = append(labels, "jira-label:"+l)
 	}
 
+	// Tag epics for beads3d graph visibility.
+	if issue.Fields.IssueType != nil && issue.Fields.IssueType.Name == "Epic" {
+		labels = append(labels, "jira-epic")
+	}
+
 	// Build fields.
 	fields := map[string]string{
 		"jira_key":     issue.Key,
@@ -216,6 +227,30 @@ func (p *JiraPoller) createBeadFromIssue(ctx context.Context, issue JiraIssue) (
 	}
 	if issue.Fields.Reporter != nil {
 		fields["jira_reporter"] = issue.Fields.Reporter.DisplayName
+	}
+
+	// Attachment metadata for beads3d media indicators.
+	if len(issue.Fields.Attachments) > 0 {
+		fields["jira_attachment_count"] = fmt.Sprintf("%d", len(issue.Fields.Attachments))
+		var hasImages, hasVideo bool
+		for _, att := range issue.Fields.Attachments {
+			mime := strings.ToLower(att.MimeType)
+			if strings.HasPrefix(mime, "image/") {
+				hasImages = true
+			}
+			if strings.HasPrefix(mime, "video/") {
+				hasVideo = true
+			}
+		}
+		if hasImages {
+			fields["jira_has_images"] = "true"
+		}
+		if hasVideo {
+			fields["jira_has_video"] = "true"
+		}
+		if hasImages || hasVideo {
+			labels = append(labels, "jira-has-media")
+		}
 	}
 
 	fieldsJSON, err := json.Marshal(fields)
@@ -249,6 +284,85 @@ func (p *JiraPoller) createBeadFromIssue(ctx context.Context, issue JiraIssue) (
 	}
 
 	return beadID, nil
+}
+
+// wireDependencies wires child-of and issue-link edges for a batch of issues.
+func (p *JiraPoller) wireDependencies(ctx context.Context, issues []JiraIssue) {
+	p.mu.Lock()
+	snapshot := make(map[string]string, len(p.tracked))
+	for k, v := range p.tracked {
+		snapshot[k] = v
+	}
+	p.mu.Unlock()
+
+	wired := 0
+
+	// Pass A: child-of edges (issue with Parent → parent bead).
+	for _, issue := range issues {
+		if issue.Fields.Parent == nil {
+			continue
+		}
+		childID, childOK := snapshot[issue.Key]
+		parentID, parentOK := snapshot[issue.Fields.Parent.Key]
+		if !childOK || !parentOK {
+			continue
+		}
+		dedupKey := childID + ":child-of:" + parentID
+		if p.wiredDeps[dedupKey] {
+			continue
+		}
+		if err := p.daemon.AddDependency(ctx, childID, parentID, "child-of", "jira-bridge"); err != nil {
+			p.cfg.Logger.Warn("failed to wire child-of dependency",
+				"child", issue.Key, "parent", issue.Fields.Parent.Key, "error", err)
+			continue
+		}
+		p.wiredDeps[dedupKey] = true
+		wired++
+	}
+
+	// Pass B: issue link edges.
+	for _, issue := range issues {
+		srcID, srcOK := snapshot[issue.Key]
+		if !srcOK {
+			continue
+		}
+		for _, link := range issue.Fields.IssueLinks {
+			depType := MapJiraLinkType(link.Type.Name)
+
+			// Determine the target issue key.
+			var targetKey string
+			if link.OutwardIssue != nil {
+				targetKey = link.OutwardIssue.Key
+			} else if link.InwardIssue != nil {
+				targetKey = link.InwardIssue.Key
+			}
+			if targetKey == "" {
+				continue
+			}
+
+			targetID, targetOK := snapshot[targetKey]
+			if !targetOK {
+				// Target not yet imported — skip silently.
+				continue
+			}
+
+			dedupKey := srcID + ":" + depType + ":" + targetID
+			if p.wiredDeps[dedupKey] {
+				continue
+			}
+			if err := p.daemon.AddDependency(ctx, srcID, targetID, depType, "jira-bridge"); err != nil {
+				p.cfg.Logger.Warn("failed to wire issue link dependency",
+					"source", issue.Key, "target", targetKey, "type", depType, "error", err)
+				continue
+			}
+			p.wiredDeps[dedupKey] = true
+			wired++
+		}
+	}
+
+	if wired > 0 {
+		p.cfg.Logger.Info("wired JIRA dependencies", "count", wired)
+	}
 }
 
 // buildJQL constructs the JQL query for polling.

@@ -13,10 +13,19 @@ import (
 	"gasboat/controller/internal/beadsapi"
 )
 
+// depRecord records a dependency wiring call.
+type depRecord struct {
+	BeadID      string
+	DependsOnID string
+	DepType     string
+	CreatedBy   string
+}
+
 // mockJiraDaemon implements JiraBeadClient for testing.
 type mockJiraDaemon struct {
 	mu     sync.Mutex
 	beads  map[string]*beadsapi.BeadDetail
+	deps   []depRecord
 	nextID int
 }
 
@@ -55,6 +64,26 @@ func (m *mockJiraDaemon) ListTaskBeads(_ context.Context) ([]*beadsapi.BeadDetai
 		}
 	}
 	return result, nil
+}
+
+func (m *mockJiraDaemon) AddDependency(_ context.Context, beadID, dependsOnID, depType, createdBy string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deps = append(m.deps, depRecord{
+		BeadID:      beadID,
+		DependsOnID: dependsOnID,
+		DepType:     depType,
+		CreatedBy:   createdBy,
+	})
+	return nil
+}
+
+func (m *mockJiraDaemon) getDeps() []depRecord {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]depRecord, len(m.deps))
+	copy(out, m.deps)
+	return out
 }
 
 func (m *mockJiraDaemon) getBeads() map[string]*beadsapi.BeadDetail {
@@ -278,6 +307,312 @@ func TestMapJiraPriority(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := MapJiraPriority(tt.name); got != tt.expected {
 				t.Errorf("MapJiraPriority(%q) = %d, want %d", tt.name, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestJiraPoller_EpicImport(t *testing.T) {
+	jiraServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"issues": []map[string]any{{
+				"key": "PE-9000", "id": "9000",
+				"fields": map[string]any{
+					"summary":   "Upload Epic",
+					"status":    map[string]string{"name": "To Do"},
+					"issuetype": map[string]string{"name": "Epic"},
+					"priority":  map[string]string{"name": "High"},
+				},
+			}},
+			"total": 1,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer jiraServer.Close()
+
+	daemon := newMockJiraDaemon()
+	poller := NewJiraPoller(newTestJiraClient(jiraServer.URL), daemon, JiraPollerConfig{
+		Projects: []string{"PE"}, IssueTypes: []string{"Epic"}, Logger: slog.Default(),
+	})
+	poller.poll(context.Background())
+
+	beads := daemon.getBeads()
+	if len(beads) != 1 {
+		t.Fatalf("expected 1 bead, got %d", len(beads))
+	}
+	var bead *beadsapi.BeadDetail
+	for _, b := range beads {
+		bead = b
+	}
+	hasEpicLabel := false
+	for _, l := range bead.Labels {
+		if l == "jira-epic" {
+			hasEpicLabel = true
+		}
+	}
+	if !hasEpicLabel {
+		t.Errorf("expected jira-epic label, got %v", bead.Labels)
+	}
+}
+
+func TestJiraPoller_ChildOfDep(t *testing.T) {
+	jiraServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"issues": []map[string]any{
+				{
+					"key": "PE-9000", "id": "9000",
+					"fields": map[string]any{
+						"summary":   "Upload Epic",
+						"status":    map[string]string{"name": "To Do"},
+						"issuetype": map[string]string{"name": "Epic"},
+						"priority":  map[string]string{"name": "High"},
+					},
+				},
+				{
+					"key": "PE-9001", "id": "9001",
+					"fields": map[string]any{
+						"summary":   "Upload Task",
+						"status":    map[string]string{"name": "To Do"},
+						"issuetype": map[string]string{"name": "Task"},
+						"priority":  map[string]string{"name": "Medium"},
+						"parent":    map[string]any{"key": "PE-9000", "fields": map[string]string{"summary": "Upload Epic"}},
+					},
+				},
+			},
+			"total": 2,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer jiraServer.Close()
+
+	daemon := newMockJiraDaemon()
+	poller := NewJiraPoller(newTestJiraClient(jiraServer.URL), daemon, JiraPollerConfig{
+		Projects: []string{"PE"}, Logger: slog.Default(),
+	})
+	poller.poll(context.Background())
+
+	deps := daemon.getDeps()
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 dependency, got %d", len(deps))
+	}
+	if deps[0].DepType != "child-of" {
+		t.Errorf("expected child-of, got %s", deps[0].DepType)
+	}
+	if deps[0].CreatedBy != "jira-bridge" {
+		t.Errorf("expected created_by=jira-bridge, got %s", deps[0].CreatedBy)
+	}
+}
+
+func TestJiraPoller_IssueLinks(t *testing.T) {
+	jiraServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"issues": []map[string]any{
+				{
+					"key": "PE-100", "id": "100",
+					"fields": map[string]any{
+						"summary":   "Blocker",
+						"status":    map[string]string{"name": "To Do"},
+						"issuetype": map[string]string{"name": "Bug"},
+						"priority":  map[string]string{"name": "High"},
+						"issuelinks": []map[string]any{{
+							"type":         map[string]string{"name": "Blocks", "inward": "is blocked by", "outward": "blocks"},
+							"outwardIssue": map[string]string{"key": "PE-101"},
+						}},
+					},
+				},
+				{
+					"key": "PE-101", "id": "101",
+					"fields": map[string]any{
+						"summary":   "Blocked",
+						"status":    map[string]string{"name": "To Do"},
+						"issuetype": map[string]string{"name": "Bug"},
+						"priority":  map[string]string{"name": "Medium"},
+					},
+				},
+			},
+			"total": 2,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer jiraServer.Close()
+
+	daemon := newMockJiraDaemon()
+	poller := NewJiraPoller(newTestJiraClient(jiraServer.URL), daemon, JiraPollerConfig{
+		Projects: []string{"PE"}, Logger: slog.Default(),
+	})
+	poller.poll(context.Background())
+
+	deps := daemon.getDeps()
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 dependency, got %d", len(deps))
+	}
+	if deps[0].DepType != "blocks" {
+		t.Errorf("expected blocks, got %s", deps[0].DepType)
+	}
+}
+
+func TestJiraPoller_IssueLinks_TargetMissing(t *testing.T) {
+	jiraServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"issues": []map[string]any{{
+				"key": "PE-200", "id": "200",
+				"fields": map[string]any{
+					"summary":   "Has link to missing",
+					"status":    map[string]string{"name": "To Do"},
+					"issuetype": map[string]string{"name": "Task"},
+					"priority":  map[string]string{"name": "Medium"},
+					"issuelinks": []map[string]any{{
+						"type":         map[string]string{"name": "Relates", "inward": "relates to", "outward": "relates to"},
+						"outwardIssue": map[string]string{"key": "PE-999"},
+					}},
+				},
+			}},
+			"total": 1,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer jiraServer.Close()
+
+	daemon := newMockJiraDaemon()
+	poller := NewJiraPoller(newTestJiraClient(jiraServer.URL), daemon, JiraPollerConfig{
+		Projects: []string{"PE"}, Logger: slog.Default(),
+	})
+	poller.poll(context.Background())
+
+	// No error, no dependency wired (target PE-999 not imported).
+	deps := daemon.getDeps()
+	if len(deps) != 0 {
+		t.Errorf("expected 0 dependencies for missing target, got %d", len(deps))
+	}
+}
+
+func TestJiraPoller_AttachmentMetadata(t *testing.T) {
+	jiraServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"issues": []map[string]any{{
+				"key": "PE-300", "id": "300",
+				"fields": map[string]any{
+					"summary":   "Has attachments",
+					"status":    map[string]string{"name": "To Do"},
+					"issuetype": map[string]string{"name": "Bug"},
+					"priority":  map[string]string{"name": "Medium"},
+					"attachment": []map[string]any{
+						{"id": "1", "filename": "screenshot.png", "mimeType": "image/png", "size": 1024, "content": "https://jira.example.com/att/1"},
+						{"id": "2", "filename": "recording.mp4", "mimeType": "video/mp4", "size": 5242880, "content": "https://jira.example.com/att/2"},
+						{"id": "3", "filename": "log.txt", "mimeType": "text/plain", "size": 512, "content": "https://jira.example.com/att/3"},
+					},
+				},
+			}},
+			"total": 1,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer jiraServer.Close()
+
+	daemon := newMockJiraDaemon()
+	poller := NewJiraPoller(newTestJiraClient(jiraServer.URL), daemon, JiraPollerConfig{
+		Projects: []string{"PE"}, Logger: slog.Default(),
+	})
+	poller.poll(context.Background())
+
+	beads := daemon.getBeads()
+	if len(beads) != 1 {
+		t.Fatalf("expected 1 bead, got %d", len(beads))
+	}
+	var bead *beadsapi.BeadDetail
+	for _, b := range beads {
+		bead = b
+	}
+	if bead.Fields["jira_attachment_count"] != "3" {
+		t.Errorf("jira_attachment_count=%s, want 3", bead.Fields["jira_attachment_count"])
+	}
+	if bead.Fields["jira_has_images"] != "true" {
+		t.Errorf("jira_has_images=%s, want true", bead.Fields["jira_has_images"])
+	}
+	if bead.Fields["jira_has_video"] != "true" {
+		t.Errorf("jira_has_video=%s, want true", bead.Fields["jira_has_video"])
+	}
+	hasMediaLabel := false
+	for _, l := range bead.Labels {
+		if l == "jira-has-media" {
+			hasMediaLabel = true
+		}
+	}
+	if !hasMediaLabel {
+		t.Errorf("expected jira-has-media label, got %v", bead.Labels)
+	}
+}
+
+func TestJiraPoller_NoAttachments(t *testing.T) {
+	jiraServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"issues": []map[string]any{{
+				"key": "PE-400", "id": "400",
+				"fields": map[string]any{
+					"summary":   "No attachments",
+					"status":    map[string]string{"name": "To Do"},
+					"issuetype": map[string]string{"name": "Task"},
+					"priority":  map[string]string{"name": "Medium"},
+				},
+			}},
+			"total": 1,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer jiraServer.Close()
+
+	daemon := newMockJiraDaemon()
+	poller := NewJiraPoller(newTestJiraClient(jiraServer.URL), daemon, JiraPollerConfig{
+		Projects: []string{"PE"}, Logger: slog.Default(),
+	})
+	poller.poll(context.Background())
+
+	beads := daemon.getBeads()
+	if len(beads) != 1 {
+		t.Fatalf("expected 1 bead, got %d", len(beads))
+	}
+	var bead *beadsapi.BeadDetail
+	for _, b := range beads {
+		bead = b
+	}
+	if _, ok := bead.Fields["jira_attachment_count"]; ok {
+		t.Errorf("expected no jira_attachment_count field, got %s", bead.Fields["jira_attachment_count"])
+	}
+	if _, ok := bead.Fields["jira_has_images"]; ok {
+		t.Errorf("expected no jira_has_images field")
+	}
+	for _, l := range bead.Labels {
+		if l == "jira-has-media" {
+			t.Errorf("unexpected jira-has-media label")
+		}
+	}
+}
+
+func TestMapJiraLinkType(t *testing.T) {
+	tests := []struct {
+		name     string
+		expected string
+	}{
+		{"Blocks", "blocks"},
+		{"blocks", "blocks"},
+		{"Relates", "relates"},
+		{"Duplicate", "duplicate"},
+		{"Action Item", "action-item"},
+		{"Escalate", "escalate"},
+		{"Cloners", "clones"},
+		{"Unknown Type", "jira-link"},
+		{"", "jira-link"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MapJiraLinkType(tt.name); got != tt.expected {
+				t.Errorf("MapJiraLinkType(%q) = %q, want %q", tt.name, got, tt.expected)
 			}
 		})
 	}

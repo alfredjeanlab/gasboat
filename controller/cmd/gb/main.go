@@ -100,6 +100,7 @@ func init() {
 	rootCmd.AddCommand(inboxCmd)
 	rootCmd.AddCommand(newsCmd)
 	rootCmd.AddCommand(adviceCmd)
+	rootCmd.AddCommand(attachmentsCmd)
 
 	// Session Control
 	rootCmd.AddCommand(setupCmd)
