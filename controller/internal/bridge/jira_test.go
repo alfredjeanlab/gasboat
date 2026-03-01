@@ -298,6 +298,118 @@ func TestMapJiraPriority(t *testing.T) {
 	}
 }
 
+func TestJiraPoller_AttachmentMetadata(t *testing.T) {
+	jiraServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"issues": []map[string]any{{
+				"key": "PE-8001", "id": "8001",
+				"fields": map[string]any{
+					"summary": "Bug with screenshots", "status": map[string]string{"name": "To Do"},
+					"issuetype": map[string]string{"name": "Bug"}, "priority": map[string]string{"name": "High"},
+					"attachment": []map[string]any{
+						{"id": "1", "filename": "screenshot.png", "mimeType": "image/png", "size": 12345, "content": "https://jira.example.com/att/1", "created": "2026-01-15T10:00:00.000+0000"},
+						{"id": "2", "filename": "debug.log", "mimeType": "text/plain", "size": 5678, "content": "https://jira.example.com/att/2", "created": "2026-01-15T10:01:00.000+0000"},
+						{"id": "3", "filename": "repro.mp4", "mimeType": "video/mp4", "size": 999999, "content": "https://jira.example.com/att/3", "created": "2026-01-15T10:02:00.000+0000"},
+					},
+				},
+			}},
+			"total": 1,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer jiraServer.Close()
+
+	daemon := newMockJiraDaemon()
+	poller := NewJiraPoller(newTestJiraClient(jiraServer.URL), daemon, JiraPollerConfig{
+		Projects:   []string{"PE"},
+		IssueTypes: []string{"Bug"},
+		Logger:     slog.Default(),
+	})
+	poller.poll(context.Background())
+
+	beads := daemon.getBeads()
+	if len(beads) != 1 {
+		t.Fatalf("expected 1 bead, got %d", len(beads))
+	}
+	var bead *beadsapi.BeadDetail
+	for _, b := range beads {
+		bead = b
+	}
+
+	// Check attachment metadata fields.
+	if bead.Fields["jira_attachment_count"] != "3" {
+		t.Errorf("jira_attachment_count=%s, want 3", bead.Fields["jira_attachment_count"])
+	}
+	if bead.Fields["jira_has_images"] != "true" {
+		t.Errorf("jira_has_images=%s, want true", bead.Fields["jira_has_images"])
+	}
+	if bead.Fields["jira_has_video"] != "true" {
+		t.Errorf("jira_has_video=%s, want true", bead.Fields["jira_has_video"])
+	}
+
+	// Check jira-has-media label.
+	hasMediaLabel := false
+	for _, l := range bead.Labels {
+		if l == "jira-has-media" {
+			hasMediaLabel = true
+		}
+	}
+	if !hasMediaLabel {
+		t.Errorf("expected jira-has-media label, got %v", bead.Labels)
+	}
+}
+
+func TestJiraPoller_AttachmentMetadata_NoMedia(t *testing.T) {
+	jiraServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"issues": []map[string]any{{
+				"key": "PE-8002", "id": "8002",
+				"fields": map[string]any{
+					"summary": "Bug with log only", "status": map[string]string{"name": "To Do"},
+					"issuetype": map[string]string{"name": "Bug"}, "priority": map[string]string{"name": "Medium"},
+					"attachment": []map[string]any{
+						{"id": "1", "filename": "debug.log", "mimeType": "text/plain", "size": 1024},
+					},
+				},
+			}},
+			"total": 1,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer jiraServer.Close()
+
+	daemon := newMockJiraDaemon()
+	poller := NewJiraPoller(newTestJiraClient(jiraServer.URL), daemon, JiraPollerConfig{
+		Projects: []string{"PE"}, Logger: slog.Default(),
+	})
+	poller.poll(context.Background())
+
+	beads := daemon.getBeads()
+	if len(beads) != 1 {
+		t.Fatalf("expected 1 bead, got %d", len(beads))
+	}
+	var bead *beadsapi.BeadDetail
+	for _, b := range beads {
+		bead = b
+	}
+
+	// Has attachment count but no media flags.
+	if bead.Fields["jira_attachment_count"] != "1" {
+		t.Errorf("jira_attachment_count=%s, want 1", bead.Fields["jira_attachment_count"])
+	}
+	if bead.Fields["jira_has_images"] != "" {
+		t.Errorf("jira_has_images should be empty, got %s", bead.Fields["jira_has_images"])
+	}
+	// No jira-has-media label.
+	for _, l := range bead.Labels {
+		if l == "jira-has-media" {
+			t.Errorf("should not have jira-has-media label for non-media attachments")
+		}
+	}
+}
+
 func TestJiraPoller_EpicImport(t *testing.T) {
 	jiraServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := map[string]any{

@@ -130,7 +130,7 @@ func (p *JiraPoller) poll(ctx context.Context) {
 	}
 
 	jql := p.buildJQL()
-	fields := []string{"summary", "description", "status", "issuetype", "priority", "reporter", "labels", "parent", "created", "updated"}
+	fields := []string{"summary", "description", "status", "issuetype", "priority", "reporter", "labels", "parent", "attachment", "created", "updated"}
 
 	issues, err := p.jira.SearchIssues(ctx, jql, fields, 50)
 	if err != nil {
@@ -241,6 +241,30 @@ func (p *JiraPoller) createBeadFromIssue(ctx context.Context, issue JiraIssue) (
 	}
 	if issue.Fields.Reporter != nil {
 		fields["jira_reporter"] = issue.Fields.Reporter.DisplayName
+	}
+
+	// Attachment metadata (no blob storage).
+	if n := len(issue.Fields.Attachment); n > 0 {
+		fields["jira_attachment_count"] = fmt.Sprintf("%d", n)
+		hasImages := false
+		hasVideo := false
+		for _, a := range issue.Fields.Attachment {
+			if strings.HasPrefix(a.MimeType, "image/") {
+				hasImages = true
+			}
+			if strings.HasPrefix(a.MimeType, "video/") {
+				hasVideo = true
+			}
+		}
+		if hasImages {
+			fields["jira_has_images"] = "true"
+		}
+		if hasVideo {
+			fields["jira_has_video"] = "true"
+		}
+		if hasImages || hasVideo {
+			labels = append(labels, "jira-has-media")
+		}
 	}
 
 	fieldsJSON, err := json.Marshal(fields)

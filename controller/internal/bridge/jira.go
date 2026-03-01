@@ -55,17 +55,29 @@ type JiraIssue struct {
 
 // JiraIssueFields contains the fields of a JIRA issue.
 type JiraIssueFields struct {
-	Summary     string          `json:"summary"`
-	Description json.RawMessage `json:"description"` // ADF format
-	Status      *JiraNamedRef   `json:"status"`
-	IssueType   *JiraNamedRef   `json:"issuetype"`
-	Priority    *JiraNamedRef   `json:"priority"`
-	Reporter    *JiraUser       `json:"reporter"`
-	Assignee    *JiraUser       `json:"assignee"`
-	Labels      []string        `json:"labels"`
-	Parent      *JiraParentRef  `json:"parent"` // epic link
-	Created     string          `json:"created"`
-	Updated     string          `json:"updated"`
+	Summary     string            `json:"summary"`
+	Description json.RawMessage   `json:"description"` // ADF format
+	Status      *JiraNamedRef     `json:"status"`
+	IssueType   *JiraNamedRef     `json:"issuetype"`
+	Priority    *JiraNamedRef     `json:"priority"`
+	Reporter    *JiraUser         `json:"reporter"`
+	Assignee    *JiraUser         `json:"assignee"`
+	Labels      []string          `json:"labels"`
+	Parent      *JiraParentRef    `json:"parent"` // epic link
+	Attachment  []JiraAttachment  `json:"attachment"`
+	Created     string            `json:"created"`
+	Updated     string            `json:"updated"`
+}
+
+// JiraAttachment represents a JIRA issue attachment.
+type JiraAttachment struct {
+	ID        string `json:"id"`
+	Filename  string `json:"filename"`
+	MimeType  string `json:"mimeType"`
+	Size      int    `json:"size"`
+	Content   string `json:"content"`   // download URL
+	Thumbnail string `json:"thumbnail"` // thumbnail URL
+	Created   string `json:"created"`
 }
 
 // JiraNamedRef is a JIRA object with a name field (status, priority, issuetype).
