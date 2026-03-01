@@ -101,6 +101,13 @@ func main() {
 	decisionAPI.RegisterRoutes(mux)
 	mux.Handle("/api/decisions/events", bridge.NewDecisionSSEProxy(cfg.beadsHTTPAddr, logger))
 	mux.Handle("/ui/", http.StripPrefix("/ui/", bridge.WebHandler()))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/ui/", http.StatusFound)
+			return
+		}
+		http.NotFound(w, r)
+	})
 
 	if cfg.slackBotToken != "" && cfg.slackAppToken != "" {
 		// Socket Mode: real-time WebSocket connection for events, interactions, slash commands.

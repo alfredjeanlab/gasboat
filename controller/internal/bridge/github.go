@@ -7,6 +7,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"sort"
+	"strconv"
 	"time"
 )
 
@@ -72,9 +75,28 @@ func NewGitHubClient(token string, logger *slog.Logger) *GitHubClient {
 	}
 }
 
-// GetLatestTag returns the most recent tag for the repo.
+// calverRe matches calver tags like "2026.60.2" or "v2026.60.2".
+var calverRe = regexp.MustCompile(`^v?(\d{4})\.(\d+)\.(\d+)$`)
+
+// calverKey extracts (year, dayOfYear, build) from a calver tag.
+// Returns ok=false if the tag doesn't match.
+func calverKey(tag string) (year, doy, build int, ok bool) {
+	m := calverRe.FindStringSubmatch(tag)
+	if m == nil {
+		return 0, 0, 0, false
+	}
+	year, _ = strconv.Atoi(m[1])
+	doy, _ = strconv.Atoi(m[2])
+	build, _ = strconv.Atoi(m[3])
+	return year, doy, build, true
+}
+
+// GetLatestTag returns the most recent calver tag for the repo.
+// It fetches up to 100 tags, picks the highest calver tag by
+// (year, dayOfYear, build), and falls back to the first tag if
+// none match the calver format.
 func (c *GitHubClient) GetLatestTag(ctx context.Context, repo RepoRef) (string, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/tags?per_page=1", c.baseURL, repo.Owner, repo.Repo)
+	url := fmt.Sprintf("%s/repos/%s/%s/tags?per_page=100", c.baseURL, repo.Owner, repo.Repo)
 	var tags []ghTag
 	if err := c.doJSON(ctx, url, &tags); err != nil {
 		return "", err
@@ -82,7 +104,32 @@ func (c *GitHubClient) GetLatestTag(ctx context.Context, repo RepoRef) (string, 
 	if len(tags) == 0 {
 		return "", fmt.Errorf("no tags found for %s", repo)
 	}
-	return tags[0].Name, nil
+
+	// Collect tags that match calver format.
+	type calverTag struct {
+		name               string
+		year, doy, build   int
+	}
+	var cv []calverTag
+	for _, t := range tags {
+		if y, d, b, ok := calverKey(t.Name); ok {
+			cv = append(cv, calverTag{name: t.Name, year: y, doy: d, build: b})
+		}
+	}
+	if len(cv) == 0 {
+		return tags[0].Name, nil
+	}
+
+	sort.Slice(cv, func(i, j int) bool {
+		if cv[i].year != cv[j].year {
+			return cv[i].year > cv[j].year
+		}
+		if cv[i].doy != cv[j].doy {
+			return cv[i].doy > cv[j].doy
+		}
+		return cv[i].build > cv[j].build
+	})
+	return cv[0].name, nil
 }
 
 // CompareTagToHead compares a tag to the head of a branch.

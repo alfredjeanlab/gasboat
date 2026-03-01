@@ -27,13 +27,70 @@ func newTestGitHubClient(baseURL, token string) *GitHubClient {
 	}
 }
 
-func TestGetLatestTag(t *testing.T) {
+func TestGetLatestTag_CalverPreferredOverSemver(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/repos/org/repo/tags" {
 			http.NotFound(w, r)
 			return
 		}
-		writeJSON(w, []ghTag{{Name: "v1.2.3"}})
+		// GitHub returns these in commit-date order which may put old
+		// semver tags first — calver sort should pick 2026.60.2.
+		writeJSON(w, []ghTag{
+			{Name: "v0.3.14"},
+			{Name: "v2026.58.11"},
+			{Name: "2026.60.2"},
+			{Name: "2026.59.4"},
+			{Name: "v0.1.0"},
+		})
+	}))
+	defer srv.Close()
+
+	client := newTestGitHubClient(srv.URL, "")
+	tag, err := client.GetLatestTag(context.Background(), RepoRef{Owner: "org", Repo: "repo"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tag != "2026.60.2" {
+		t.Errorf("got tag %q, want 2026.60.2", tag)
+	}
+}
+
+func TestGetLatestTag_MixedVPrefixCalver(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/org/repo/tags" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, []ghTag{
+			{Name: "v2026.58.11"},
+			{Name: "2026.60.2"},
+			{Name: "v2026.60.3"},
+			{Name: "2026.59.4"},
+		})
+	}))
+	defer srv.Close()
+
+	client := newTestGitHubClient(srv.URL, "")
+	tag, err := client.GetLatestTag(context.Background(), RepoRef{Owner: "org", Repo: "repo"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tag != "v2026.60.3" {
+		t.Errorf("got tag %q, want v2026.60.3", tag)
+	}
+}
+
+func TestGetLatestTag_FallbackNoCalver(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/org/repo/tags" {
+			http.NotFound(w, r)
+			return
+		}
+		// No calver tags — should fall back to the first tag.
+		writeJSON(w, []ghTag{
+			{Name: "v1.2.3"},
+			{Name: "v0.9.0"},
+		})
 	}))
 	defer srv.Close()
 
@@ -209,6 +266,31 @@ func TestAuthHeader(t *testing.T) {
 			t.Errorf("got Authorization=%q, want empty", gotAuth)
 		}
 	})
+}
+
+func TestCalverKey(t *testing.T) {
+	tests := []struct {
+		tag              string
+		wantOK           bool
+		wantY, wantD, wantB int
+	}{
+		{"2026.60.2", true, 2026, 60, 2},
+		{"v2026.58.11", true, 2026, 58, 11},
+		{"v0.3.14", false, 0, 0, 0},
+		{"not-a-tag", false, 0, 0, 0},
+		{"v1.2", false, 0, 0, 0},
+		{"latest", false, 0, 0, 0},
+	}
+	for _, tc := range tests {
+		y, d, b, ok := calverKey(tc.tag)
+		if ok != tc.wantOK {
+			t.Errorf("calverKey(%q) ok=%v, want %v", tc.tag, ok, tc.wantOK)
+			continue
+		}
+		if ok && (y != tc.wantY || d != tc.wantD || b != tc.wantB) {
+			t.Errorf("calverKey(%q) = (%d,%d,%d), want (%d,%d,%d)", tc.tag, y, d, b, tc.wantY, tc.wantD, tc.wantB)
+		}
+	}
 }
 
 func TestShortSHA(t *testing.T) {
