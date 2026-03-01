@@ -279,6 +279,31 @@ func shortDigest(digest string) string {
 	return digest
 }
 
+// CompareSHAs compares two commit SHAs and returns the comparison result.
+func (c *GitHubClient) CompareSHAs(ctx context.Context, repo RepoRef, base, head string) (*ghCompare, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/compare/%s...%s", c.baseURL, repo.Owner, repo.Repo, base, head)
+	var result ghCompare
+	if err := c.doJSON(ctx, url, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ImageToRepo maps a GHCR image reference to a GitHub RepoRef.
+// e.g., "ghcr.io/groblegark/gasboat/agent:latest" → RepoRef{Owner: "groblegark", Repo: "gasboat"}
+// For images with sub-paths (gasboat/agent), uses the first path component as the repo.
+func ImageToRepo(image string) (RepoRef, bool) {
+	org, pkg, err := parseGHCRImageRef(image)
+	if err != nil {
+		return RepoRef{}, false
+	}
+	// Strip sub-paths: "gasboat/agent" → "gasboat"
+	if i := strings.Index(pkg, "/"); i > 0 {
+		pkg = pkg[:i]
+	}
+	return RepoRef{Owner: org, Repo: pkg}, true
+}
+
 // doJSON performs a GET request and decodes the JSON response.
 func (c *GitHubClient) doJSON(ctx context.Context, url string, result any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
