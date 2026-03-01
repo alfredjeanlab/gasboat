@@ -118,7 +118,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ libc6-dev binutils \
     pkg-config libssl-dev \
     libcurl3t64-gnutls libicu74 libicu-dev \
-    postgresql-client shellcheck && \
+    postgresql-client shellcheck \
+    ffmpeg cmake libsdl2-dev && \
     ln -sf /usr/bin/python3 /usr/bin/python && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -180,7 +181,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env INSTALLER_NO_MODIFY_PATH=1 
 
 # ── Bun ────────────────────────────────────────────────────────
 ENV BUN_INSTALL=/usr/local/bun
-RUN curl -fsSL https://bun.sh/install | bash && \
+RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=${BUN_INSTALL} bash && \
     ln -sf ${BUN_INSTALL}/bin/bun /usr/local/bin/bun && \
     ln -sf ${BUN_INSTALL}/bin/bunx /usr/local/bin/bunx
 ENV PATH="${BUN_INSTALL}/bin:${PATH}"
@@ -238,6 +239,16 @@ ARG RTK_VERSION=0.22.2
 RUN case "${TARGETARCH}" in arm64) RTK_TRIPLE=aarch64-unknown-linux-gnu ;; *) RTK_TRIPLE=x86_64-unknown-linux-gnu ;; esac && \
     curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-${RTK_TRIPLE}.tar.gz" \
       | tar -xz -C /usr/local/bin rtk
+
+# ── whisper-cli (audio transcription for JIRA video attachments) ──
+ARG WHISPER_CPP_VERSION=1.8.3
+RUN curl -fsSL "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v${WHISPER_CPP_VERSION}.tar.gz" \
+      | tar -xz -C /tmp && \
+    cmake -S /tmp/whisper.cpp-${WHISPER_CPP_VERSION} -B /tmp/whisper-build \
+      -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF && \
+    cmake --build /tmp/whisper-build --config Release -j$(nproc) --target whisper-cli && \
+    cp /tmp/whisper-build/bin/whisper-cli /usr/local/bin/whisper-cli && \
+    rm -rf /tmp/whisper.cpp-${WHISPER_CPP_VERSION} /tmp/whisper-build
 
 # ── Playwright + Chromium (headless browser automation) ──────────
 ARG PLAYWRIGHT_VERSION=1.50.1
