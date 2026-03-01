@@ -145,6 +145,31 @@ func configs() map[string]any {
 				{Name: "mr_url", Type: "string"},
 			},
 		},
+
+		// --- templates & bundles -----------------------------------------
+		//
+		// Templates are reusable work definitions (ported from beads formulas).
+		// A template defines variables and steps; applying a template creates
+		// a bundle (an epic with child issues, variable-substituted).
+
+		"type:template": TypeConfig{
+			Kind: "data",
+			Fields: []FieldDef{
+				// Variable definitions: [{name, description, required, default, type, enum}]
+				{Name: "vars", Type: "json"},
+				// Step definitions: [{id, title, type, description, depends_on, labels, priority, condition, assignee}]
+				{Name: "steps", Type: "json"},
+			},
+		},
+		"type:bundle": TypeConfig{
+			Kind: "issue",
+			Fields: []FieldDef{
+				// ID of the template bead this bundle was created from.
+				{Name: "template_id", Type: "string"},
+				// Variable values applied during instantiation.
+				{Name: "applied_vars", Type: "json"},
+			},
+		},
 		"type:report": TypeConfig{
 			Kind: "data",
 			Fields: []FieldDef{
