@@ -104,13 +104,14 @@ func runStop(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("setting stop_requested on bead %s: %w", agentID, err)
 	}
 
+	fmt.Printf("Stop requested for agent %s.\n", agentID)
+
 	// Request coop shutdown so the session actually terminates.
 	// Without this, the entrypoint blocks on wait(COOP_PID) and never
 	// reaches the stop_requested check.
 	requestCoopShutdown()
 
-	fmt.Printf("Stop requested for agent %s.\n", agentID)
-	fmt.Printf("Exit now — the entrypoint will not restart this pod.\n")
+	fmt.Printf("Coop shutdown requested — pod will terminate after session ends.\n")
 	return nil
 }
 
