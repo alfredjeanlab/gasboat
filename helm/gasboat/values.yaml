@@ -865,6 +865,15 @@ gitlabBridge:
     type: ClusterIP
     port: 8092
 
+  ingress:
+    enabled: false
+    host: ""
+    pathPrefix: ""
+    ipWhitelist:
+      enabled: false
+      sourceRange: []
+      depth: 1
+
   resources:
     requests:
       cpu: 50m

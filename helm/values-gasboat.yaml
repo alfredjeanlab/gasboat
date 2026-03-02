@@ -286,6 +286,11 @@ gitlabBridge:
     secretKey: token
     groupID: "14176856"
     pollInterval: 5m
+  ingress:
+    enabled: true
+    host: gitlab-bridge.gasboat.app.e2e.dev.fics.ai
+    ipWhitelist:
+      enabled: false
   logLevel: debug
   nodeSelector:
     kubernetes.io/arch: amd64
