@@ -1,0 +1,68 @@
+name: Bump coop version
+
+# Triggered automatically after a coop release (via repository_dispatch from
+# coop CI) or manually. Also runs on a daily schedule as a safety net.
+on:
+  repository_dispatch:
+    types: [coop-release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'coop version to pin (e.g. 2026.224.0). Leave empty to use latest.'
+        required: false
+        type: string
+  schedule:
+    - cron: '0 7 * * *'   # daily at 07:00 UTC (offset from kd bump at 06:00)
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve target version
+        id: target
+        run: |
+          # Priority: explicit input > dispatch payload > latest release
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ github.event.client_payload.tag }}" ]; then
+            echo "version=${{ github.event.client_payload.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            LATEST=$(curl -fsSL https://api.github.com/repos/groblegark/coop/releases/latest \
+              | jq -r .tag_name)
+            echo "version=${LATEST}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read current version from Dockerfile
+        id: current
+        run: |
+          CURRENT=$(grep -oP 'COOP_VERSION=\K\S+' images/agent/Dockerfile | head -1)
+          echo "version=${CURRENT}" >> "$GITHUB_OUTPUT"
+
+      - name: Update Dockerfile
+        if: steps.target.outputs.version != steps.current.outputs.version
+        run: |
+          NEW="${{ steps.target.outputs.version }}"
+          sed -i "s/ARG COOP_VERSION=\S*/ARG COOP_VERSION=${NEW}/" images/agent/Dockerfile
+
+      - name: Commit and push
+        id: push
+        if: steps.target.outputs.version != steps.current.outputs.version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add images/agent/Dockerfile
+          git commit -m "chore: bump coop to ${{ steps.target.outputs.version }}"
+          git push origin main
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger agent image rebuild
+        if: steps.push.outputs.pushed == 'true'
+        run: gh workflow run ci.yml --ref main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

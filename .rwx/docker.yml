@@ -908,7 +908,7 @@ tasks:
       TAG="${REF_NAME#refs/tags/}"
       TAG="${TAG#refs/heads/}"
 
-      crane cp ghcr.io/groblegark/coop:latest ghcr.io/groblegark/coop:${TAG}
+      crane cp ghcr.io/groblegark/coop:coopmux ghcr.io/groblegark/coop:${TAG}
       APP_VERSION=$(grep '^appVersion:' helm/gasboat/Chart.yaml | sed 's/appVersion: *"\?\([^"]*\)"\?/\1/')
       if [ -n "$APP_VERSION" ] && [ "$APP_VERSION" != "$TAG" ]; then
         crane tag ghcr.io/groblegark/coop:${TAG} "$APP_VERSION"
