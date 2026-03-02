@@ -712,6 +712,53 @@ monitor_agent_exit() {
     done
 }
 
+# ── Idle agent nudge ─────────────────────────────────────────────────────
+# Crew-mode agents that finish their task sit idle. This background loop
+# detects prolonged idle state and nudges the agent to pick up new work.
+monitor_agent_idle() {
+    local idle_threshold="${COOP_IDLE_NUDGE_SECS:-120}"
+    local poll_interval=10
+    local idle_since=0
+    local last_nudge=0
+
+    # Only nudge crew-mode agents; job-mode agents exit on completion.
+    if [ "${BOAT_MODE:-crew}" != "crew" ]; then
+        return 0
+    fi
+
+    sleep 30  # let agent settle after startup
+    while true; do
+        sleep "${poll_interval}"
+        state=$(curl -sf http://localhost:8080/api/v1/agent 2>/dev/null) || continue
+        agent_state=$(echo "${state}" | jq -r '.state // empty' 2>/dev/null)
+
+        if [ "${agent_state}" = "idle" ]; then
+            now=$(date +%s)
+            if [ "${idle_since}" -eq 0 ]; then
+                idle_since="${now}"
+            fi
+            idle_duration=$(( now - idle_since ))
+            since_last_nudge=$(( now - last_nudge ))
+
+            if [ "${idle_duration}" -ge "${idle_threshold}" ] && [ "${since_last_nudge}" -ge "${idle_threshold}" ]; then
+                echo "[entrypoint] Agent idle for ${idle_duration}s, nudging to check for new work"
+                curl -sf -X POST http://localhost:8080/api/v1/agent/nudge \
+                    -H 'Content-Type: application/json' \
+                    -d '{"message": "You have been idle. Run `gb ready` to check for new work, then `kd claim <id>` on any available task."}' \
+                    2>/dev/null || true
+                last_nudge="${now}"
+            fi
+        else
+            idle_since=0
+        fi
+
+        # Exit if agent has exited (monitor_agent_exit handles shutdown).
+        if [ "${agent_state}" = "exited" ]; then
+            return 0
+        fi
+    done
+}
+
 # ── Mux registration ──────────────────────────────────────────────────────
 MUX_SESSION_ID=""
 register_with_mux() {
@@ -829,6 +876,7 @@ while true; do
         COOP_PID=$!
         (auto_bypass_startup && inject_initial_prompt) &
         monitor_agent_exit &
+        monitor_agent_idle &
         wait "${COOP_PID}" 2>/dev/null && exit_code=0 || exit_code=$?
         COOP_PID=""
 
@@ -843,6 +891,7 @@ while true; do
         COOP_PID=$!
         (auto_bypass_startup && inject_initial_prompt) &
         monitor_agent_exit &
+        monitor_agent_idle &
         wait "${COOP_PID}" 2>/dev/null && exit_code=0 || exit_code=$?
         COOP_PID=""
     fi
