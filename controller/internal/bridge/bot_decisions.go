@@ -237,7 +237,7 @@ func (b *Bot) NotifyDecision(ctx context.Context, bead BeadEvent) error {
 	}
 
 	// Track the message and update pending count.
-	ref := MessageRef{ChannelID: channelID, Timestamp: ts, Agent: agent}
+	ref := MessageRef{ChannelID: channelID, Timestamp: ts, Agent: agent, ThreadTS: threadTS}
 	b.mu.Lock()
 	b.messages[bead.ID] = ref
 	if b.agentThreadingEnabled() && agent != "" {
@@ -406,20 +406,49 @@ func (b *Bot) PostReport(ctx context.Context, decisionID, reportType, content st
 	emoji := decisionPriorityEmoji(priority) + " " + reportEmoji(reportType)
 
 	// Fetch the existing resolved message so we can append the report.
-	msgs, err := b.api.GetConversationHistory(&slack.GetConversationHistoryParameters{
-		ChannelID: ref.ChannelID,
-		Latest:    ref.Timestamp,
-		Inclusive: true,
-		Limit:     1,
-	})
-	if err != nil {
-		return fmt.Errorf("fetch decision message: %w", err)
+	// Thread replies are not visible in conversations.history — use
+	// conversations.replies when the message was posted in a thread.
+	var existing slack.Message
+	if ref.ThreadTS != "" {
+		replies, _, _, err := b.api.GetConversationReplies(&slack.GetConversationRepliesParameters{
+			ChannelID: ref.ChannelID,
+			Timestamp: ref.ThreadTS,
+			Oldest:    ref.Timestamp,
+			Latest:    ref.Timestamp,
+			Inclusive: true,
+			Limit:     1,
+		})
+		if err != nil {
+			return fmt.Errorf("fetch decision message from thread: %w", err)
+		}
+		found := false
+		for _, m := range replies {
+			if m.Timestamp == ref.Timestamp {
+				existing = m
+				found = true
+				break
+			}
+		}
+		if !found {
+			b.logger.Warn("decision message not found in thread replies",
+				"decision", decisionID, "channel", ref.ChannelID, "ts", ref.Timestamp, "thread_ts", ref.ThreadTS)
+			return nil
+		}
+	} else {
+		msgs, err := b.api.GetConversationHistory(&slack.GetConversationHistoryParameters{
+			ChannelID: ref.ChannelID,
+			Latest:    ref.Timestamp,
+			Inclusive: true,
+			Limit:     1,
+		})
+		if err != nil {
+			return fmt.Errorf("fetch decision message: %w", err)
+		}
+		if len(msgs.Messages) == 0 {
+			return nil
+		}
+		existing = msgs.Messages[0]
 	}
-	if len(msgs.Messages) == 0 {
-		return nil
-	}
-
-	existing := msgs.Messages[0]
 
 	// Build updated blocks: keep existing blocks, append divider + report.
 	var blocks []slack.Block
