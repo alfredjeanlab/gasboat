@@ -21,6 +21,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"gasboat/controller/internal/beadsapi"
 )
 
 // claimedNudgeTTL is the minimum interval between nudges for the same bead.
@@ -100,9 +102,7 @@ func (c *Claimed) handleUpdated(ctx context.Context, data []byte) {
 		"assignee", bead.Assignee,
 		"type", bead.Type)
 
-	message := fmt.Sprintf("Your claimed bead %s %q was updated — run 'kd show %s' to review",
-		bead.ID, bead.Title, bead.ID)
-	c.nudgeAgent(ctx, *bead, message)
+	c.nudgeAgent(ctx, *bead)
 }
 
 func (c *Claimed) handleClosed(ctx context.Context, data []byte) {
