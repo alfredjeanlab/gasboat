@@ -605,6 +605,131 @@ func TestApplyProjectDefaults_EnvOverrides(t *testing.T) {
 	}
 }
 
+func TestBuildAgentPodSpec_SlackThreadMetadata(t *testing.T) {
+	cfg := &config.Config{
+		Namespace:    "test",
+		ProjectCache: map[string]config.ProjectCacheEntry{},
+	}
+	event := subscriber.Event{
+		Project:   "gasboat",
+		Role:      "crew",
+		AgentName: "thread-agent",
+		Metadata: map[string]string{
+			"slack_thread_channel": "C-support",
+			"slack_thread_ts":     "1234.5678",
+		},
+	}
+	spec := buildAgentPodSpec(cfg, event)
+
+	if spec.Env["SLACK_THREAD_CHANNEL"] != "C-support" {
+		t.Errorf("expected SLACK_THREAD_CHANNEL=C-support, got %q", spec.Env["SLACK_THREAD_CHANNEL"])
+	}
+	if spec.Env["SLACK_THREAD_TS"] != "1234.5678" {
+		t.Errorf("expected SLACK_THREAD_TS=1234.5678, got %q", spec.Env["SLACK_THREAD_TS"])
+	}
+}
+
+func TestBuildAgentPodSpec_SlackThreadMetadataAbsent(t *testing.T) {
+	cfg := &config.Config{
+		Namespace:    "test",
+		ProjectCache: map[string]config.ProjectCacheEntry{},
+	}
+	event := subscriber.Event{
+		Project:   "gasboat",
+		Role:      "crew",
+		AgentName: "normal-agent",
+		Metadata:  map[string]string{},
+	}
+	spec := buildAgentPodSpec(cfg, event)
+
+	if _, ok := spec.Env["SLACK_THREAD_CHANNEL"]; ok {
+		t.Error("expected SLACK_THREAD_CHANNEL to not be set for non-thread agent")
+	}
+	if _, ok := spec.Env["SLACK_THREAD_TS"]; ok {
+		t.Error("expected SLACK_THREAD_TS to not be set for non-thread agent")
+	}
+}
+
+func TestBuildAgentPodSpec_SpawnSourceSlackThread_DefaultsToJob(t *testing.T) {
+	cfg := &config.Config{
+		Namespace:    "test",
+		ProjectCache: map[string]config.ProjectCacheEntry{},
+	}
+	event := subscriber.Event{
+		Project:   "gasboat",
+		Role:      "crew",
+		AgentName: "thread-agent",
+		// Mode is empty — should default to "job" for slack-thread spawn source.
+		Metadata: map[string]string{
+			"spawn_source":        "slack-thread",
+			"slack_thread_channel": "C-test",
+			"slack_thread_ts":     "1.1",
+		},
+	}
+	spec := buildAgentPodSpec(cfg, event)
+
+	if spec.Mode != "job" {
+		t.Errorf("expected mode=job for slack-thread spawn, got %q", spec.Mode)
+	}
+}
+
+func TestBuildAgentPodSpec_SpawnSourceSlackThread_ExplicitModePreserved(t *testing.T) {
+	cfg := &config.Config{
+		Namespace:    "test",
+		ProjectCache: map[string]config.ProjectCacheEntry{},
+	}
+	event := subscriber.Event{
+		Project:   "gasboat",
+		Mode:      "crew", // Explicit mode set — should NOT be overridden.
+		Role:      "crew",
+		AgentName: "thread-agent",
+		Metadata: map[string]string{
+			"spawn_source": "slack-thread",
+		},
+	}
+	spec := buildAgentPodSpec(cfg, event)
+
+	if spec.Mode != "crew" {
+		t.Errorf("expected explicit mode=crew to be preserved, got %q", spec.Mode)
+	}
+}
+
+func TestApplyCommonConfig_SlackBridgeURL(t *testing.T) {
+	cfg := &config.Config{
+		SlackBridgeURL: "http://gasboat-slack-bridge:8090",
+		ProjectCache:   map[string]config.ProjectCacheEntry{},
+	}
+	spec := &podmanager.AgentPodSpec{
+		Project: "myproject",
+		Env:     map[string]string{},
+	}
+	applyCommonConfig(cfg, spec)
+
+	if spec.Env["SLACK_BRIDGE_URL"] != "http://gasboat-slack-bridge:8090" {
+		t.Errorf("expected SLACK_BRIDGE_URL, got %q", spec.Env["SLACK_BRIDGE_URL"])
+	}
+}
+
+func TestBuildSpecFromBeadInfo_SlackThreadMetadata(t *testing.T) {
+	cfg := &config.Config{
+		Namespace: "test",
+		CoopImage: "agent:latest",
+		ProjectCache: map[string]config.ProjectCacheEntry{},
+	}
+	metadata := map[string]string{
+		"slack_thread_channel": "C-help",
+		"slack_thread_ts":     "9999.0001",
+	}
+	spec := BuildSpecFromBeadInfo(cfg, "gasboat", "crew", "crew", "agent1", metadata)
+
+	if spec.Env["SLACK_THREAD_CHANNEL"] != "C-help" {
+		t.Errorf("expected SLACK_THREAD_CHANNEL=C-help, got %q", spec.Env["SLACK_THREAD_CHANNEL"])
+	}
+	if spec.Env["SLACK_THREAD_TS"] != "9999.0001" {
+		t.Errorf("expected SLACK_THREAD_TS=9999.0001, got %q", spec.Env["SLACK_THREAD_TS"])
+	}
+}
+
 func TestApplyProjectDefaults_NoOverrides(t *testing.T) {
 	cfg := &config.Config{
 		ProjectCache: map[string]config.ProjectCacheEntry{

@@ -80,6 +80,14 @@ func BuildSpecFromBeadInfo(cfg *config.Config, project, mode, role, agentName st
 		spec.Env["BOAT_PROMPT"] = prompt
 	}
 
+	// Slack thread metadata.
+	if ch := metadata["slack_thread_channel"]; ch != "" {
+		spec.Env["SLACK_THREAD_CHANNEL"] = ch
+	}
+	if ts := metadata["slack_thread_ts"]; ts != "" {
+		spec.Env["SLACK_THREAD_TS"] = ts
+	}
+
 	return spec
 }
 
@@ -88,6 +96,12 @@ func BuildSpecFromBeadInfo(cfg *config.Config, project, mode, role, agentName st
 func buildAgentPodSpec(cfg *config.Config, event subscriber.Event) podmanager.AgentPodSpec {
 	ns := namespaceFromEvent(event, cfg.Namespace)
 	mode := modeForRole(event.Mode, event.Role)
+
+	// Thread-spawned agents default to job mode (no PVC, restartPolicy: Never)
+	// unless the bead explicitly sets a different mode.
+	if event.Metadata["spawn_source"] == "slack-thread" && event.Mode == "" {
+		mode = "job"
+	}
 
 	spec := podmanager.AgentPodSpec{
 		Project:   event.Project,
@@ -139,6 +153,15 @@ func buildAgentPodSpec(cfg *config.Config, event subscriber.Event) podmanager.Ag
 	// Custom prompt: pass through to entrypoint for initial nudge message.
 	if prompt := event.Metadata["prompt"]; prompt != "" {
 		spec.Env["BOAT_PROMPT"] = prompt
+	}
+
+	// Slack thread metadata: inject thread coordinates so agents spawned
+	// from a Slack thread can read/reply via the slack-bridge HTTP API.
+	if ch := event.Metadata["slack_thread_channel"]; ch != "" {
+		spec.Env["SLACK_THREAD_CHANNEL"] = ch
+	}
+	if ts := event.Metadata["slack_thread_ts"]; ts != "" {
+		spec.Env["SLACK_THREAD_TS"] = ts
 	}
 
 	return spec
@@ -405,6 +428,11 @@ func applyCommonConfig(cfg *config.Config, spec *podmanager.AgentPodSpec) {
 			SecretName: cfg.RwxAccessTokenSecret,
 			SecretKey:  "token",
 		})
+	}
+
+	// Slack bridge URL for agent gb slack commands.
+	if cfg.SlackBridgeURL != "" {
+		spec.Env["SLACK_BRIDGE_URL"] = cfg.SlackBridgeURL
 	}
 
 	// Per-project secret overrides: merge project secrets on top of globals.

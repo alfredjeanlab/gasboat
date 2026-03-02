@@ -166,6 +166,12 @@ type Config struct {
 	// Default: 5m.
 	UpgradeDrainTimeout time.Duration
 
+	// --- Slack Bridge ---
+
+	// SlackBridgeURL is the URL of the slack-bridge HTTP service (env: SLACK_BRIDGE_URL).
+	// Injected as SLACK_BRIDGE_URL in agent pods so gb slack commands can reach the bridge.
+	SlackBridgeURL string
+
 	// --- Controller ---
 
 	// LogLevel controls log verbosity: debug, info, warn, error (env: LOG_LEVEL).
@@ -259,6 +265,9 @@ func Parse() *Config {
 		LeaderElectionIdentity: envOr("POD_NAME", hostname()),
 
 		// Slack config removed — handled by standalone slack-bridge (bd-8x8fy).
+
+		// Slack Bridge
+		SlackBridgeURL: os.Getenv("SLACK_BRIDGE_URL"),
 
 		// Upgrade Drain
 		UpgradeDrainTimeout: envDurationOr("COOP_UPGRADE_DRAIN_TIMEOUT", 5*time.Minute),
