@@ -483,15 +483,18 @@ func (m *K8sManager) buildEnvVars(spec AgentPodSpec) []corev1.EnvVar {
 
 	// Daemon token from secret for agent→daemon authentication.
 	if spec.DaemonTokenSecret != "" {
-		envVars = append(envVars, corev1.EnvVar{
-			Name: "BEADS_DAEMON_TOKEN",
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: spec.DaemonTokenSecret},
-					Key:                  "token",
-				},
+		secretRef := corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: spec.DaemonTokenSecret},
+				Key:                  "token",
 			},
-		})
+		}
+		envVars = append(envVars,
+			corev1.EnvVar{Name: "BEADS_DAEMON_TOKEN", ValueFrom: &secretRef},
+			// BEADS_AUTH_TOKEN is read by the kd CLI to authenticate
+			// requests to the beads daemon HTTP API.
+			corev1.EnvVar{Name: "BEADS_AUTH_TOKEN", ValueFrom: &secretRef},
+		)
 	}
 
 	return envVars

@@ -655,17 +655,28 @@ func TestBuildEnvVars_DaemonToken(t *testing.T) {
 	}
 
 	envVars := mgr.buildEnvVars(spec)
-	var found bool
+	var foundDaemon, foundAuth bool
 	for _, e := range envVars {
-		if e.Name == "BEADS_DAEMON_TOKEN" && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
-			found = true
-			if e.ValueFrom.SecretKeyRef.Name != "beads-token" {
-				t.Errorf("daemon token secret name = %s, want beads-token", e.ValueFrom.SecretKeyRef.Name)
+		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+			switch e.Name {
+			case "BEADS_DAEMON_TOKEN":
+				foundDaemon = true
+				if e.ValueFrom.SecretKeyRef.Name != "beads-token" {
+					t.Errorf("daemon token secret name = %s, want beads-token", e.ValueFrom.SecretKeyRef.Name)
+				}
+			case "BEADS_AUTH_TOKEN":
+				foundAuth = true
+				if e.ValueFrom.SecretKeyRef.Name != "beads-token" {
+					t.Errorf("auth token secret name = %s, want beads-token", e.ValueFrom.SecretKeyRef.Name)
+				}
 			}
 		}
 	}
-	if !found {
+	if !foundDaemon {
 		t.Error("expected BEADS_DAEMON_TOKEN from secret")
+	}
+	if !foundAuth {
+		t.Error("expected BEADS_AUTH_TOKEN from secret")
 	}
 }
 

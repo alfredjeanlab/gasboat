@@ -53,6 +53,13 @@ spec:
               value: ":9090"
             - name: BEADS_HTTP_ADDR
               value: ":8080"
+            {{- if .Values.beads.tokenSecret }}
+            - name: BEADS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gasboat.beads.tokenSecretName" . }}
+                  key: token
+            {{- end }}
             {{- $natsURL := .Values.beads.natsURL | default (include "gasboat.natsURL" .) }}
             {{- if $natsURL }}
             - name: BEADS_NATS_URL
