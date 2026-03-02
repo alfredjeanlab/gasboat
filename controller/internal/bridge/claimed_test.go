@@ -300,7 +300,7 @@ func TestClaimed_HandleClosed_ClaimedTask_NudgesCheckpoint(t *testing.T) {
 	if msg == "" {
 		t.Fatal("expected coop nudge for claimed task closure, got none")
 	}
-	want := `Your claimed bead kd-xyz "Finished work" was closed — work bead closed, create a decision checkpoint now`
+	want := `Your claimed bead kd-xyz "Finished work" was closed — work is complete, create a decision checkpoint now`
 	if msg != want {
 		t.Errorf("unexpected nudge message:\n  got:  %s\n  want: %s", msg, want)
 	}

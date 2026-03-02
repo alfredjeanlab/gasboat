@@ -129,39 +129,6 @@ func (c *Claimed) handleClosed(ctx context.Context, data []byte) {
 		return
 	}
 
-	c.logger.Info("claimed bead closed, nudging assignee for checkpoint",
-		"id", bead.ID,
-		"title", bead.Title,
-		"assignee", bead.Assignee,
-		"type", bead.Type)
-
-	message := fmt.Sprintf("Your claimed bead %s %q was closed — work bead closed, create a decision checkpoint now",
-		bead.ID, bead.Title)
-	c.nudgeAgent(ctx, *bead, message)
-}
-
-func (c *Claimed) handleClosed(ctx context.Context, data []byte) {
-	bead := ParseBeadEvent(data)
-	if bead == nil {
-		c.logger.Debug("skipping malformed bead closed event")
-		return
-	}
-
-	// Only nudge for claimed beads (assignee present).
-	if bead.Assignee == "" {
-		return
-	}
-
-	// Skip infrastructure/system bead types.
-	if skipClaimedTypes[bead.Type] {
-		return
-	}
-
-	// Rate-limit: skip if we nudged for this bead recently.
-	if !c.shouldNudge(bead.ID) {
-		return
-	}
-
 	c.logger.Info("claimed bead closed, nudging assignee to checkpoint",
 		"id", bead.ID,
 		"title", bead.Title,

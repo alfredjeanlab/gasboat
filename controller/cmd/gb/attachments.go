@@ -16,69 +16,91 @@ import (
 // attJiraKeyRe matches a strict JIRA key (e.g., "PE-7001").
 var attJiraKeyRe = regexp.MustCompile(`^[A-Z]+-\d+$`)
 
-var attachmentsCmd = &cobra.Command{
-	Use:     "attachments <bead-id-or-jira-key>",
-	Short:   "List JIRA attachments for a bead or issue key",
-	GroupID: "orchestration",
-	Args:    cobra.ExactArgs(1),
-	RunE:    runAttachments,
-}
-
 var (
 	attJiraURL   string
 	attJiraEmail string
 	attJiraToken string
 )
 
-var attachmentsDownloadCmd = &cobra.Command{
-	Use:   "download <bead-id-or-jira-key>",
-	Short: "Download JIRA attachments for a bead or issue key",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runAttachmentsDownload,
+var attachmentsCmd = &cobra.Command{
+	Use:     "attachments",
+	Short:   "JIRA attachment commands",
+	GroupID: "orchestration",
 }
 
-var attOutputDir string
+var attachmentsListCmd = &cobra.Command{
+	Use:   "list <bead-id-or-jira-key>",
+	Short: "List JIRA attachments for a bead or issue key",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runAttachmentsList,
+}
+
+var attachmentsDownloadCmd = &cobra.Command{
+	Use:   "download <bead-id-or-jira-key> [filename-glob]",
+	Short: "Download JIRA attachments to a local directory",
+	Long: `Download JIRA attachments for a bead or issue key.
+
+If a filename glob is provided, only matching attachments are downloaded.
+By default all attachments are downloaded.
+
+Examples:
+  gb attachments download PE-7001
+  gb attachments download PE-7001 "*.png" -o /tmp
+  gb attachments download my-bead-id --all`,
+	Args: cobra.RangeArgs(1, 2),
+	RunE: runAttachmentsDownload,
+}
 
 func init() {
-	attachmentsCmd.Flags().StringVar(&attJiraURL, "jira-url", os.Getenv("JIRA_BASE_URL"), "JIRA base URL")
-	attachmentsCmd.Flags().StringVar(&attJiraEmail, "jira-email", os.Getenv("JIRA_EMAIL"), "JIRA email")
-	attachmentsCmd.Flags().StringVar(&attJiraToken, "jira-token", os.Getenv("JIRA_API_TOKEN"), "JIRA API token")
+	attachmentsCmd.PersistentFlags().StringVar(&attJiraURL, "jira-url", os.Getenv("JIRA_BASE_URL"), "JIRA base URL")
+	attachmentsCmd.PersistentFlags().StringVar(&attJiraEmail, "jira-email", os.Getenv("JIRA_EMAIL"), "JIRA email")
+	attachmentsCmd.PersistentFlags().StringVar(&attJiraToken, "jira-token", os.Getenv("JIRA_API_TOKEN"), "JIRA API token")
 
-	attachmentsDownloadCmd.Flags().StringVarP(&attOutputDir, "output-dir", "o", ".", "directory to save attachments")
-	// Inherit JIRA flags from parent.
-	attachmentsDownloadCmd.Flags().StringVar(&attJiraURL, "jira-url", os.Getenv("JIRA_BASE_URL"), "JIRA base URL")
-	attachmentsDownloadCmd.Flags().StringVar(&attJiraEmail, "jira-email", os.Getenv("JIRA_EMAIL"), "JIRA email")
-	attachmentsDownloadCmd.Flags().StringVar(&attJiraToken, "jira-token", os.Getenv("JIRA_API_TOKEN"), "JIRA API token")
+	attachmentsDownloadCmd.Flags().StringP("output-dir", "o", ".", "Directory to save downloaded files")
+	attachmentsDownloadCmd.Flags().Bool("all", false, "Download all attachments without listing first")
+
+	attachmentsCmd.AddCommand(attachmentsListCmd)
 	attachmentsCmd.AddCommand(attachmentsDownloadCmd)
 }
 
-func runAttachments(cmd *cobra.Command, args []string) error {
-	arg := args[0]
-
-	// Resolve JIRA key: either passed directly or fetched from bead fields.
-	var jiraKey string
+// resolveJiraKey resolves a bead ID or JIRA key argument to a JIRA issue key.
+func resolveJiraKey(cmd *cobra.Command, arg string) (string, error) {
 	if attJiraKeyRe.MatchString(arg) {
-		jiraKey = arg
-	} else {
-		bead, err := daemon.GetBead(cmd.Context(), arg)
-		if err != nil {
-			return fmt.Errorf("fetching bead %s: %w", arg, err)
-		}
-		jiraKey = bead.Fields["jira_key"]
-		if jiraKey == "" {
-			return fmt.Errorf("bead %s has no jira_key field", arg)
-		}
+		return arg, nil
 	}
+	bead, err := daemon.GetBead(cmd.Context(), arg)
+	if err != nil {
+		return "", fmt.Errorf("fetching bead %s: %w", arg, err)
+	}
+	jiraKey := bead.Fields["jira_key"]
+	if jiraKey == "" {
+		return "", fmt.Errorf("bead %s has no jira_key field", arg)
+	}
+	return jiraKey, nil
+}
 
+// newAttJiraClient constructs a JiraClient from the shared attachment flags.
+func newAttJiraClient() (*bridge.JiraClient, error) {
 	if attJiraURL == "" {
-		return fmt.Errorf("--jira-url or JIRA_BASE_URL is required")
+		return nil, fmt.Errorf("--jira-url or JIRA_BASE_URL is required")
 	}
-
-	jiraClient := bridge.NewJiraClient(bridge.JiraClientConfig{
+	return bridge.NewJiraClient(bridge.JiraClientConfig{
 		BaseURL:  attJiraURL,
 		Email:    attJiraEmail,
 		APIToken: attJiraToken,
-	})
+	}), nil
+}
+
+func runAttachmentsList(cmd *cobra.Command, args []string) error {
+	jiraKey, err := resolveJiraKey(cmd, args[0])
+	if err != nil {
+		return err
+	}
+
+	jiraClient, err := newAttJiraClient()
+	if err != nil {
+		return err
+	}
 
 	issue, err := jiraClient.GetIssue(cmd.Context(), jiraKey)
 	if err != nil {
@@ -118,6 +140,84 @@ func runAttachments(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func runAttachmentsDownload(cmd *cobra.Command, args []string) error {
+	jiraKey, err := resolveJiraKey(cmd, args[0])
+	if err != nil {
+		return err
+	}
+
+	jiraClient, err := newAttJiraClient()
+	if err != nil {
+		return err
+	}
+
+	outputDir, _ := cmd.Flags().GetString("output-dir")
+
+	// Parse optional filename glob filter.
+	var globPattern string
+	if len(args) > 1 {
+		globPattern = args[1]
+	}
+
+	issue, err := jiraClient.GetIssue(cmd.Context(), jiraKey)
+	if err != nil {
+		return fmt.Errorf("fetching JIRA issue %s: %w", jiraKey, err)
+	}
+
+	attachments := issue.Fields.Attachments
+	if len(attachments) == 0 {
+		cmd.Printf("No attachments for %s\n", jiraKey)
+		return nil
+	}
+
+	// Filter by glob if provided.
+	if globPattern != "" {
+		var filtered []bridge.JiraAttachment
+		for _, att := range attachments {
+			matched, err := filepath.Match(globPattern, att.Filename)
+			if err != nil {
+				return fmt.Errorf("invalid glob pattern %q: %w", globPattern, err)
+			}
+			if matched {
+				filtered = append(filtered, att)
+			}
+		}
+		if len(filtered) == 0 {
+			cmd.Printf("No attachments matching %q for %s\n", globPattern, jiraKey)
+			return nil
+		}
+		attachments = filtered
+	}
+
+	// Ensure output directory exists.
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return fmt.Errorf("creating output directory: %w", err)
+	}
+
+	// Print what we're downloading.
+	cmd.Printf("Downloading %d attachment(s) from %s to %s\n", len(attachments), jiraKey, outputDir)
+
+	for _, att := range attachments {
+		destPath := filepath.Join(outputDir, att.Filename)
+
+		f, err := os.Create(destPath)
+		if err != nil {
+			return fmt.Errorf("creating %s: %w", att.Filename, err)
+		}
+
+		if err := jiraClient.DownloadAttachment(cmd.Context(), att.Content, f); err != nil {
+			f.Close()
+			os.Remove(destPath)
+			return fmt.Errorf("downloading %s: %w", att.Filename, err)
+		}
+		f.Close()
+
+		cmd.Printf("  Downloaded %s (%s)\n", att.Filename, formatSize(att.Size))
+	}
+
+	return nil
+}
+
 func truncateStr(s string, max int) string {
 	if len(s) <= max {
 		return s
@@ -136,73 +236,4 @@ func formatSize(b int64) string {
 	default:
 		return fmt.Sprintf("%d B", b)
 	}
-}
-
-func runAttachmentsDownload(cmd *cobra.Command, args []string) error {
-	arg := args[0]
-
-	var jiraKey string
-	if attJiraKeyRe.MatchString(arg) {
-		jiraKey = arg
-	} else {
-		bead, err := daemon.GetBead(cmd.Context(), arg)
-		if err != nil {
-			return fmt.Errorf("fetching bead %s: %w", arg, err)
-		}
-		jiraKey = bead.Fields["jira_key"]
-		if jiraKey == "" {
-			return fmt.Errorf("bead %s has no jira_key field", arg)
-		}
-	}
-
-	if attJiraURL == "" {
-		return fmt.Errorf("--jira-url or JIRA_BASE_URL is required")
-	}
-
-	jiraClient := bridge.NewJiraClient(bridge.JiraClientConfig{
-		BaseURL:  attJiraURL,
-		Email:    attJiraEmail,
-		APIToken: attJiraToken,
-	})
-
-	issue, err := jiraClient.GetIssue(cmd.Context(), jiraKey)
-	if err != nil {
-		return fmt.Errorf("fetching JIRA issue %s: %w", jiraKey, err)
-	}
-
-	attachments := issue.Fields.Attachments
-	if len(attachments) == 0 {
-		cmd.Printf("No attachments for %s\n", jiraKey)
-		return nil
-	}
-
-	// Ensure output directory exists.
-	if err := os.MkdirAll(attOutputDir, 0o755); err != nil {
-		return fmt.Errorf("creating output dir %s: %w", attOutputDir, err)
-	}
-
-	downloaded := 0
-	for _, att := range attachments {
-		dest := filepath.Join(attOutputDir, att.Filename)
-		cmd.Printf("Downloading %s (%s)...", att.Filename, formatSize(att.Size))
-
-		f, err := os.Create(dest)
-		if err != nil {
-			cmd.Printf(" FAILED: %v\n", err)
-			continue
-		}
-
-		if err := jiraClient.DownloadAttachment(cmd.Context(), att.Content, f); err != nil {
-			f.Close()
-			os.Remove(dest)
-			cmd.Printf(" FAILED: %v\n", err)
-			continue
-		}
-		f.Close()
-		cmd.Printf(" OK\n")
-		downloaded++
-	}
-
-	cmd.Printf("Downloaded %d/%d attachments to %s\n", downloaded, len(attachments), attOutputDir)
-	return nil
 }
