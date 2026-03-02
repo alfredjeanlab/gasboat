@@ -458,6 +458,107 @@ func TestDecisionQuestion(t *testing.T) {
 	}
 }
 
+func TestDecisions_HandleReportClosed(t *testing.T) {
+	daemon := newMockDaemon()
+	notif := &mockNotifier{}
+
+	d := &Decisions{
+		daemon:   daemon,
+		notifier: notif,
+		logger:   slog.Default(),
+	}
+
+	// Simulate a report bead close event with all fields present.
+	event := marshalSSEBeadPayload(BeadEvent{
+		ID:   "rpt-1",
+		Type: "report",
+		Fields: map[string]string{
+			"decision_id": "dec-100",
+			"report_type": "plan",
+			"content":     "Step 1: do X\nStep 2: do Y",
+		},
+	})
+	d.handleReportClosed(context.Background(), event)
+
+	reports := notif.getReports()
+	if len(reports) != 1 {
+		t.Fatalf("expected 1 report call, got %d", len(reports))
+	}
+	if reports[0].DecisionID != "dec-100" {
+		t.Errorf("decision_id = %q, want dec-100", reports[0].DecisionID)
+	}
+	if reports[0].ReportType != "plan" {
+		t.Errorf("report_type = %q, want plan", reports[0].ReportType)
+	}
+	if reports[0].Content != "Step 1: do X\nStep 2: do Y" {
+		t.Errorf("content = %q", reports[0].Content)
+	}
+}
+
+func TestDecisions_HandleReportClosed_FetchesMissingFields(t *testing.T) {
+	daemon := newMockDaemon()
+	// Pre-populate daemon with the report bead so handleReportClosed can fetch it.
+	daemon.beads["rpt-2"] = &beadsapi.BeadDetail{
+		ID:   "rpt-2",
+		Type: "report",
+		Fields: map[string]string{
+			"decision_id": "dec-200",
+			"report_type": "checklist",
+			"content":     "[ ] verify auth\n[ ] verify logging",
+		},
+	}
+	notif := &mockNotifier{}
+
+	d := &Decisions{
+		daemon:   daemon,
+		notifier: notif,
+		logger:   slog.Default(),
+	}
+
+	// SSE event with fields stripped (content and decision_id missing).
+	event := marshalSSEBeadPayload(BeadEvent{
+		ID:     "rpt-2",
+		Type:   "report",
+		Fields: map[string]string{},
+	})
+	d.handleReportClosed(context.Background(), event)
+
+	reports := notif.getReports()
+	if len(reports) != 1 {
+		t.Fatalf("expected 1 report call after fetch, got %d", len(reports))
+	}
+	if reports[0].DecisionID != "dec-200" {
+		t.Errorf("decision_id = %q, want dec-200", reports[0].DecisionID)
+	}
+	if reports[0].Content != "[ ] verify auth\n[ ] verify logging" {
+		t.Errorf("content = %q", reports[0].Content)
+	}
+}
+
+func TestDecisions_HandleReportClosed_SkipsNonReport(t *testing.T) {
+	notif := &mockNotifier{}
+
+	d := &Decisions{
+		notifier: notif,
+		logger:   slog.Default(),
+	}
+
+	// A decision bead close event should not trigger PostReport.
+	event := marshalSSEBeadPayload(BeadEvent{
+		ID:   "dec-300",
+		Type: "decision",
+		Fields: map[string]string{
+			"decision_id": "dec-300",
+			"content":     "some content",
+		},
+	})
+	d.handleReportClosed(context.Background(), event)
+
+	if len(notif.getReports()) != 0 {
+		t.Error("expected no report calls for non-report bead")
+	}
+}
+
 func TestMockDaemon_ListDecisionBeads_Empty(t *testing.T) {
 	daemon := newMockDaemon()
 

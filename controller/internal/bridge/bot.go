@@ -544,9 +544,12 @@ func (b *Bot) updateMessageResolved(ctx context.Context, beadID, chosen, rationa
 	}
 	b.mu.Unlock()
 
-	// Remove from persisted state so pending count doesn't re-inflate on restart.
-	if b.state != nil {
-		_ = b.state.RemoveDecisionMessage(beadID)
+	// Persist with Agent cleared so PostReport can still find the message
+	// ref after a restart, while the pending count won't re-inflate.
+	if b.state != nil && hadRef {
+		persistRef := ref
+		persistRef.Agent = ""
+		_ = b.state.SetDecisionMessage(beadID, persistRef)
 	}
 
 	if hadRef && b.agentThreadingEnabled() && agent != "" {

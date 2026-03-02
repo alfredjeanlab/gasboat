@@ -183,13 +183,20 @@ func (m *mockDaemon) getGetCalls() int {
 	return m.getCalls
 }
 
-// mockNotifier records calls to NotifyDecision, UpdateDecision, NotifyEscalation, and DismissDecision.
+// mockNotifier records calls to NotifyDecision, UpdateDecision, NotifyEscalation, DismissDecision, and PostReport.
 type mockNotifier struct {
 	mu        sync.Mutex
 	created   []BeadEvent
 	updated   []updateCall
 	escalated []BeadEvent
 	dismissed []string
+	reports   []reportCall
+}
+
+type reportCall struct {
+	DecisionID string
+	ReportType string
+	Content    string
 }
 
 type updateCall struct {
@@ -225,8 +232,17 @@ func (m *mockNotifier) DismissDecision(_ context.Context, beadID string) error {
 	return nil
 }
 
-func (m *mockNotifier) PostReport(_ context.Context, _, _, _ string) error {
+func (m *mockNotifier) PostReport(_ context.Context, decisionID, reportType, content string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reports = append(m.reports, reportCall{decisionID, reportType, content})
 	return nil
+}
+
+func (m *mockNotifier) getReports() []reportCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]reportCall{}, m.reports...)
 }
 
 func (m *mockNotifier) getCreated() []BeadEvent {
