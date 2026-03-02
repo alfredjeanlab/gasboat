@@ -79,7 +79,7 @@ spec:
         - name: coopmux
           image: "{{ .Values.coopmux.image.repository }}:{{ include "gasboat.imageTag" (dict "tag" .Values.coopmux.image.tag "global" .Values.global "Chart" .Chart) }}"
           imagePullPolicy: {{ include "gasboat.imagePullPolicy" (dict "pullPolicy" .Values.coopmux.image.pullPolicy "global" .Values.global) }}
-          command: ["coop"]
+          command: ["/coop"]
           args:
             - "--host"
             - "0.0.0.0"
