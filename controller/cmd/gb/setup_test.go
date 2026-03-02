@@ -88,6 +88,51 @@ func TestWriteUserSettings(t *testing.T) {
 	}
 }
 
+func TestAppendDetectedPlugins_NoPlugins(t *testing.T) {
+	settings := map[string]any{}
+	// With no gopls or rust-analyzer on PATH, no plugins should be added.
+	// We can't guarantee they're absent, so just verify the function doesn't panic.
+	appendDetectedPlugins(settings)
+	// If no plugins detected, enabledPlugins key may or may not exist.
+}
+
+func TestAppendDetectedPlugins_PreservesExisting(t *testing.T) {
+	settings := map[string]any{
+		"enabledPlugins": map[string]any{
+			"custom-plugin": true,
+		},
+	}
+	appendDetectedPlugins(settings)
+	plugins := settings["enabledPlugins"].(map[string]any)
+	if plugins["custom-plugin"] != true {
+		t.Error("existing plugin should be preserved")
+	}
+}
+
+func TestAppendDetectedPlugins_EmptySettings(t *testing.T) {
+	settings := map[string]any{}
+	// Should not panic on empty settings.
+	appendDetectedPlugins(settings)
+}
+
+func TestWriteUserSettings_FilePermissions(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	if err := writeUserSettings(map[string]any{"model": "test"}); err != nil {
+		t.Fatalf("writeUserSettings: %v", err)
+	}
+
+	outPath := filepath.Join(tmpDir, ".claude", "settings.json")
+	info, err := os.Stat(outPath)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("expected file permissions 0600, got %o", perm)
+	}
+}
+
 func TestRunSetupClaudeDefaults_WritesBothFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)

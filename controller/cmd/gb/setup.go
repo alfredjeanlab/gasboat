@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -138,14 +139,10 @@ func appendDetectedPlugins(settings map[string]any) {
 	}
 }
 
-// pathExists checks if a command exists on PATH.
+// pathExists checks if an executable exists on PATH.
 func pathExists(name string) bool {
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-			return true
-		}
-	}
-	return false
+	_, err := exec.LookPath(name)
+	return err == nil
 }
 
 func defaultHookSettings() map[string]any {
