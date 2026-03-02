@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"time"
@@ -71,6 +72,11 @@ var decisionCreateCmd = &cobra.Command{
 		agentID, _ := resolveAgentID("")
 		if agentID != "" {
 			fields["requesting_agent_bead_id"] = agentID
+		}
+
+		// Capture RTK token savings if RTK is enabled.
+		if rtkStats := captureRTKStats(); rtkStats != nil {
+			fields["rtk_savings"] = rtkStats
 		}
 
 		fieldsJSON, err := json.Marshal(fields)
@@ -519,6 +525,24 @@ func senderFromLabels(labels []string) string {
 		}
 	}
 	return ""
+}
+
+// captureRTKStats runs "rtk gain --format json" and returns the parsed summary,
+// or nil if RTK is not enabled or the command fails.
+func captureRTKStats() json.RawMessage {
+	if os.Getenv("RTK_ENABLED") != "true" && os.Getenv("RTK_ENABLED") != "1" {
+		return nil
+	}
+	out, err := exec.Command("rtk", "gain", "--format", "json").Output()
+	if err != nil || len(out) == 0 {
+		return nil
+	}
+	// Validate it's valid JSON before embedding.
+	var check json.RawMessage
+	if json.Unmarshal(out, &check) != nil {
+		return nil
+	}
+	return check
 }
 
 func init() {
