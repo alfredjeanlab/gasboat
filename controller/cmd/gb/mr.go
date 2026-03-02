@@ -110,6 +110,9 @@ func runMRStatus(cmd *cobra.Command, args []string) error {
 	}
 	if mr.HeadPipeline != nil && mr.HeadPipeline.ID != 0 {
 		cmd.Printf("Pipeline: #%d (%s)\n", mr.HeadPipeline.ID, mr.HeadPipeline.Status)
+		if mr.HeadPipeline.WebURL != "" {
+			cmd.Printf("          %s\n", mr.HeadPipeline.WebURL)
+		}
 	}
 	return nil
 }

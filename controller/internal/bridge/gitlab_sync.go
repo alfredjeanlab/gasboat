@@ -107,6 +107,9 @@ func (s *GitLabSync) handleUpdated(ctx context.Context, data []byte) {
 	}
 	if mr.HeadPipeline != nil {
 		fields["mr_pipeline_status"] = mr.HeadPipeline.Status
+		if mr.HeadPipeline.WebURL != "" {
+			fields["mr_pipeline_url"] = mr.HeadPipeline.WebURL
+		}
 	}
 	if mr.State == "merged" {
 		fields["mr_merged"] = "true"
@@ -249,6 +252,9 @@ func (p *GitLabPoller) poll(ctx context.Context) {
 		}
 		if mr.HeadPipeline != nil {
 			fields["mr_pipeline_status"] = mr.HeadPipeline.Status
+			if mr.HeadPipeline.WebURL != "" {
+				fields["mr_pipeline_url"] = mr.HeadPipeline.WebURL
+			}
 		}
 
 		if err := p.daemon.UpdateBeadFields(ctx, bead.ID, fields); err != nil {
@@ -282,7 +288,14 @@ func GitLabWebhookHandler(gitlab *GitLabClient, daemon GitLabBeadClient, webhook
 				Action    string `json:"action"`
 				URL       string `json:"url"`
 				ProjectID int    `json:"target_project_id"`
+				// Pipeline-specific fields (when object_kind=pipeline).
+				ID     int    `json:"id"`
+				Status string `json:"status"`
 			} `json:"object_attributes"`
+			MergeRequest *struct {
+				IID int    `json:"iid"`
+				URL string `json:"url"`
+			} `json:"merge_request"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
@@ -291,15 +304,22 @@ func GitLabWebhookHandler(gitlab *GitLabClient, daemon GitLabBeadClient, webhook
 			return
 		}
 
-		// Only process merge_request events with action=merge.
-		if event.ObjectKind != "merge_request" {
+		switch event.ObjectKind {
+		case "pipeline":
+			handlePipelineWebhook(r.Context(), event.ObjectAttr.ID, event.ObjectAttr.Status, event.ObjectAttr.URL, event.MergeRequest, daemon, logger)
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprintf(w, `{"status":"ignored","reason":"not merge_request"}`)
+			fmt.Fprintf(w, `{"status":"processed","kind":"pipeline"}`)
 			return
-		}
-		if event.ObjectAttr.Action != "merge" {
+		case "merge_request":
+			// Only process merge events.
+			if event.ObjectAttr.Action != "merge" {
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprintf(w, `{"status":"ignored","reason":"action=%s"}`, event.ObjectAttr.Action)
+				return
+			}
+		default:
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprintf(w, `{"status":"ignored","reason":"action=%s"}`, event.ObjectAttr.Action)
+			fmt.Fprintf(w, `{"status":"ignored","reason":"kind=%s"}`, event.ObjectKind)
 			return
 		}
 
@@ -347,4 +367,46 @@ func GitLabWebhookHandler(gitlab *GitLabClient, daemon GitLabBeadClient, webhook
 			fmt.Fprintf(w, `{"status":"no_match","mr_url":"%s"}`, event.ObjectAttr.URL)
 		}
 	})
+}
+
+// handlePipelineWebhook processes a GitLab pipeline webhook event. It matches
+// the pipeline's MR URL to a bead and updates the pipeline status fields.
+func handlePipelineWebhook(ctx context.Context, pipelineID int, status, pipelineURL string, mr *struct {
+	IID int    `json:"iid"`
+	URL string `json:"url"`
+}, daemon GitLabBeadClient, logger *slog.Logger) {
+	if mr == nil || mr.URL == "" {
+		logger.Debug("webhook: pipeline event has no merge_request, skipping")
+		return
+	}
+
+	logger.Info("webhook: pipeline status update",
+		"pipeline_id", pipelineID, "status", status, "mr_url", mr.URL)
+
+	beads, err := daemon.ListTaskBeads(ctx)
+	if err != nil {
+		logger.Error("webhook: failed to list beads for pipeline event", "error", err)
+		return
+	}
+
+	for _, bead := range beads {
+		if bead.Fields["mr_url"] != mr.URL {
+			continue
+		}
+
+		fields := map[string]string{
+			"mr_pipeline_status": status,
+		}
+		if pipelineURL != "" {
+			fields["mr_pipeline_url"] = pipelineURL
+		}
+
+		if err := daemon.UpdateBeadFields(ctx, bead.ID, fields); err != nil {
+			logger.Error("webhook: failed to update pipeline status on bead",
+				"bead", bead.ID, "error", err)
+		} else {
+			logger.Info("webhook: updated pipeline status on bead",
+				"bead", bead.ID, "status", status, "pipeline_id", pipelineID)
+		}
+	}
 }

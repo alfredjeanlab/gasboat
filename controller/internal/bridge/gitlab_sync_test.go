@@ -212,3 +212,72 @@ func TestGitLabWebhookHandler_AlreadyMerged(t *testing.T) {
 	}
 	// Should be a no-op since already merged.
 }
+
+func TestGitLabWebhookHandler_PipelineEvent(t *testing.T) {
+	daemon := newMockGitLabDaemon()
+	daemon.beads["bead-1"] = &beadsapi.BeadDetail{
+		ID:     "bead-1",
+		Title:  "Fix auth",
+		Type:   "task",
+		Fields: map[string]string{"mr_url": "https://gitlab.com/org/repo/-/merge_requests/42"},
+	}
+
+	handler := GitLabWebhookHandler(nil, daemon, "secret", slog.Default())
+
+	event := map[string]any{
+		"object_kind": "pipeline",
+		"object_attributes": map[string]any{
+			"id":     123,
+			"status": "failed",
+			"url":    "https://gitlab.com/org/repo/-/pipelines/123",
+		},
+		"merge_request": map[string]any{
+			"iid": 42,
+			"url": "https://gitlab.com/org/repo/-/merge_requests/42",
+		},
+	}
+	body, _ := json.Marshal(event)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
+	req.Header.Set("X-Gitlab-Token", "secret")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	bead := daemon.getBead("bead-1")
+	if bead.Fields["mr_pipeline_status"] != "failed" {
+		t.Errorf("mr_pipeline_status=%s, want failed", bead.Fields["mr_pipeline_status"])
+	}
+	if bead.Fields["mr_pipeline_url"] != "https://gitlab.com/org/repo/-/pipelines/123" {
+		t.Errorf("mr_pipeline_url=%s, want pipeline URL", bead.Fields["mr_pipeline_url"])
+	}
+}
+
+func TestGitLabWebhookHandler_PipelineEvent_NoMR(t *testing.T) {
+	daemon := newMockGitLabDaemon()
+	handler := GitLabWebhookHandler(nil, daemon, "secret", slog.Default())
+
+	event := map[string]any{
+		"object_kind": "pipeline",
+		"object_attributes": map[string]any{
+			"id":     456,
+			"status": "success",
+		},
+	}
+	body, _ := json.Marshal(event)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
+	req.Header.Set("X-Gitlab-Token", "secret")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	// No MR in event — should be a no-op.
+}

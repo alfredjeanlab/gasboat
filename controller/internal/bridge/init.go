@@ -150,6 +150,7 @@ func configs() map[string]any {
 				{Name: "mr_merged", Type: "boolean"},
 				{Name: "mr_state", Type: "enum", Values: []string{"opened", "closed", "merged", "locked"}},
 				{Name: "mr_pipeline_status", Type: "string"},
+				{Name: "mr_pipeline_url", Type: "string"},
 				{Name: "gitlab_mr_iid", Type: "string"},
 				{Name: "gitlab_project_id", Type: "string"},
 			},
