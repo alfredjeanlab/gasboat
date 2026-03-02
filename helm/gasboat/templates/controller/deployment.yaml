@@ -114,6 +114,13 @@ spec:
             {{- end }}
             - name: BEADS_TOKEN_SECRET
               value: {{ include "gasboat.beads.tokenSecretName" . }}
+            {{- if .Values.beads.tokenSecret }}
+            - name: BEADS_DAEMON_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gasboat.beads.tokenSecretName" . }}
+                  key: token
+            {{- end }}
             {{- if .Values.agents.natsURL }}
             - name: NATS_URL
               value: {{ .Values.agents.natsURL }}

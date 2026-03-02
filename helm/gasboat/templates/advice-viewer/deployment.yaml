@@ -34,6 +34,13 @@ spec:
           env:
             - name: BEADS_HTTP_ADDR
               value: "http://{{ include "gasboat.beads.host" . }}:{{ include "gasboat.beads.httpPort" . }}"
+            {{- if .Values.beads.tokenSecret }}
+            - name: BEADS_DAEMON_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gasboat.beads.tokenSecretName" . }}
+                  key: token
+            {{- end }}
             - name: LISTEN_ADDR
               value: ":{{ .Values.adviceViewer.service.port | default 8091 }}"
             {{- if .Values.adviceViewer.logLevel }}

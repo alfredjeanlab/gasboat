@@ -35,11 +35,13 @@ spec:
             # Beads daemon connection
             - name: BEADS_HTTP_ADDR
               value: "http://{{ include "gasboat.beads.host" . }}:{{ include "gasboat.beads.httpPort" . }}"
+            {{- if .Values.beads.tokenSecret }}
             - name: BEADS_DAEMON_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.beads.tokenSecret | default "kd-beads-token" }}
+                  name: {{ include "gasboat.beads.tokenSecretName" . }}
                   key: token
+            {{- end }}
             # JIRA connection
             {{- if .Values.jiraBridge.jira.baseURL }}
             - name: JIRA_BASE_URL

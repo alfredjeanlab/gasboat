@@ -79,6 +79,7 @@ func main() {
 
 	watcher := subscriber.NewSSEWatcher(subscriber.SSEConfig{
 		BeadsHTTPAddr: cfg.BeadsHTTPAddr,
+		Token:         os.Getenv("BEADS_DAEMON_TOKEN"),
 		Topics:        "beads.bead.*",
 		Namespace:     cfg.Namespace,
 		CoopImage:     cfg.CoopImage,
@@ -89,7 +90,10 @@ func main() {
 	pods := podmanager.New(k8sClient, logger)
 
 	// Daemon client for HTTP access (used by reconciler, status reporter, and bridge).
-	daemon, err := beadsapi.New(beadsapi.Config{HTTPAddr: cfg.BeadsHTTPAddr})
+	daemon, err := beadsapi.New(beadsapi.Config{
+		HTTPAddr: cfg.BeadsHTTPAddr,
+		Token:    os.Getenv("BEADS_DAEMON_TOKEN"),
+	})
 	if err != nil {
 		logger.Error("failed to create beads daemon client", "error", err)
 		os.Exit(1)

@@ -22,6 +22,9 @@ type SSEConfig struct {
 	// BeadsHTTPAddr is the kbeads HTTP base URL (e.g., "http://localhost:8080").
 	BeadsHTTPAddr string
 
+	// Token is an optional Bearer token for authenticating with the daemon.
+	Token string
+
 	// Topics is the optional comma-separated topic filter for the SSE endpoint.
 	// Empty means all events.
 	Topics string
@@ -115,6 +118,9 @@ func (w *SSEWatcher) stream(ctx context.Context) error {
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
+	if w.cfg.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+w.cfg.Token)
+	}
 
 	// Send Last-Event-ID for reconnection replay.
 	w.mu.Lock()
