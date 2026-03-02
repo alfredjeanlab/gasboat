@@ -243,7 +243,7 @@ func TestDecisionSSEProxy_FilterDecisions(t *testing.T) {
 	}))
 	defer sseSrv.Close()
 
-	proxy := NewDecisionSSEProxy(sseSrv.URL, slog.Default())
+	proxy := NewDecisionSSEProxy(sseSrv.URL, "", slog.Default())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/decisions/events", nil)
 	ctx, cancel := context.WithTimeout(req.Context(), 2*time.Second)

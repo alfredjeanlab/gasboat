@@ -45,7 +45,10 @@ func main() {
 		"listen_addr", cfg.listenAddr)
 
 	// Create beads daemon HTTP client.
-	daemon, err := beadsapi.New(beadsapi.Config{HTTPAddr: cfg.beadsHTTPAddr})
+	daemon, err := beadsapi.New(beadsapi.Config{
+		HTTPAddr: cfg.beadsHTTPAddr,
+		Token:    os.Getenv("BEADS_DAEMON_TOKEN"),
+	})
 	if err != nil {
 		logger.Error("failed to create beads daemon client", "error", err)
 		os.Exit(1)
@@ -99,7 +102,7 @@ func main() {
 	// Decisions web UI and API.
 	decisionAPI := bridge.NewDecisionAPI(daemon, logger)
 	decisionAPI.RegisterRoutes(mux)
-	mux.Handle("/api/decisions/events", bridge.NewDecisionSSEProxy(cfg.beadsHTTPAddr, logger))
+	mux.Handle("/api/decisions/events", bridge.NewDecisionSSEProxy(cfg.beadsHTTPAddr, os.Getenv("BEADS_DAEMON_TOKEN"), logger))
 	mux.Handle("/ui/", http.StripPrefix("/ui/", bridge.WebHandler()))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {

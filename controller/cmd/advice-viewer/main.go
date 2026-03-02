@@ -32,7 +32,10 @@ func main() {
 		"beads_http", cfg.beadsHTTPAddr,
 		"listen_addr", cfg.listenAddr)
 
-	daemon, err := beadsapi.New(beadsapi.Config{HTTPAddr: cfg.beadsHTTPAddr})
+	daemon, err := beadsapi.New(beadsapi.Config{
+		HTTPAddr: cfg.beadsHTTPAddr,
+		Token:    os.Getenv("BEADS_DAEMON_TOKEN"),
+	})
 	if err != nil {
 		logger.Error("failed to create beads daemon client", "error", err)
 		os.Exit(1)

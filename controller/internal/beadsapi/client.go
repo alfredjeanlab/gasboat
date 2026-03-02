@@ -54,11 +54,16 @@ type Config struct {
 	// HTTPAddr is the daemon HTTP address (e.g., "http://daemon:8080").
 	// If the value does not start with "http", it is prefixed with "http://".
 	HTTPAddr string
+
+	// Token is an optional Bearer token for authenticating with the daemon.
+	// When set, it is sent as "Authorization: Bearer <token>" on every request.
+	Token string
 }
 
 // Client queries the beads daemon via HTTP/JSON.
 type Client struct {
 	baseURL    string
+	token      string
 	httpClient *http.Client
 	sseClient  *http.Client // long-lived client with no timeout for SSE streams
 }
@@ -76,6 +81,7 @@ func New(cfg Config) (*Client, error) {
 
 	return &Client{
 		baseURL: addr,
+		token:   cfg.Token,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -664,6 +670,9 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body any, resu
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
 	resp, err := c.httpClient.Do(req)

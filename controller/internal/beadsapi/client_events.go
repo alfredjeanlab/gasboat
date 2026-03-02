@@ -34,6 +34,9 @@ func (c *Client) EventStream(ctx context.Context, topics string) (<-chan SSEEven
 		return nil, fmt.Errorf("creating SSE request: %w", err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 
 	// Use the dedicated SSE client (no timeout) for long-lived streams.
 	resp, err := c.sseClient.Do(req)

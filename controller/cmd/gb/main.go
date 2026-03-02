@@ -61,7 +61,10 @@ var rootCmd = &cobra.Command{
 It is a client of the kbeads HTTP API — all data access goes through kd serve.
 Use kd for bead CRUD (create, show, list, close); use gb for agent orchestration.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		c, err := beadsapi.New(beadsapi.Config{HTTPAddr: httpURL})
+		c, err := beadsapi.New(beadsapi.Config{
+			HTTPAddr: httpURL,
+			Token:    os.Getenv("BEADS_DAEMON_TOKEN"),
+		})
 		if err != nil {
 			return fmt.Errorf("failed to connect to beads daemon: %w", err)
 		}

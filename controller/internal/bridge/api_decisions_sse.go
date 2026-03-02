@@ -14,13 +14,15 @@ import (
 // It connects to the kbeads event stream and filters for decision-type beads.
 type DecisionSSEProxy struct {
 	beadsHTTPAddr string
+	beadsToken    string
 	logger        *slog.Logger
 }
 
 // NewDecisionSSEProxy creates an SSE proxy for decision events.
-func NewDecisionSSEProxy(beadsHTTPAddr string, logger *slog.Logger) *DecisionSSEProxy {
+func NewDecisionSSEProxy(beadsHTTPAddr, beadsToken string, logger *slog.Logger) *DecisionSSEProxy {
 	return &DecisionSSEProxy{
 		beadsHTTPAddr: beadsHTTPAddr,
+		beadsToken:    beadsToken,
 		logger:        logger,
 	}
 }
@@ -48,7 +50,10 @@ func (p *DecisionSSEProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Connect to kbeads SSE stream.
-	client, err := beadsapi.New(beadsapi.Config{HTTPAddr: p.beadsHTTPAddr})
+	client, err := beadsapi.New(beadsapi.Config{
+		HTTPAddr: p.beadsHTTPAddr,
+		Token:    p.beadsToken,
+	})
 	if err != nil {
 		p.logger.Error("failed to create beads client for SSE proxy", "error", err)
 		return
