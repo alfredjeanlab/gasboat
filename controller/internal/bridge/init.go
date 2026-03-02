@@ -153,6 +153,7 @@ func configs() map[string]any {
 				{Name: "mr_pipeline_url", Type: "string"},
 				{Name: "mr_approved", Type: "boolean"},
 				{Name: "mr_approvers", Type: "string"},
+				{Name: "mr_has_review_comments", Type: "boolean"},
 				{Name: "gitlab_mr_iid", Type: "string"},
 				{Name: "gitlab_project_id", Type: "string"},
 			},

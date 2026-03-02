@@ -133,10 +133,14 @@ func main() {
 	})
 
 	// Register GitLab sync handler on the SSE stream.
+	nudgeClient := &http.Client{Timeout: 15 * time.Second}
 	gitlabSync := bridge.NewGitLabSync(bridge.GitLabSyncConfig{
 		GitLab: gitlabClient,
 		Daemon: daemon,
 		Logger: logger,
+		Nudge: func(ctx context.Context, agentName, message string) error {
+			return bridge.NudgeAgent(ctx, daemon, nudgeClient, logger, agentName, message)
+		},
 	})
 	gitlabSync.RegisterHandlers(sseStream)
 

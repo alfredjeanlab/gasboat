@@ -23,6 +23,7 @@ import (
 type GitLabBeadClient interface {
 	ListTaskBeads(ctx context.Context) ([]*beadsapi.BeadDetail, error)
 	UpdateBeadFields(ctx context.Context, beadID string, fields map[string]string) error
+	AddComment(ctx context.Context, beadID, author, text string) error
 }
 
 // GitLabSync watches for MR merges and updates bead fields.
@@ -30,16 +31,21 @@ type GitLabSync struct {
 	gitlab *GitLabClient
 	daemon GitLabBeadClient
 	logger *slog.Logger
+	nudge  NudgeFunc
 
 	mu   sync.Mutex
 	seen map[string]time.Time // dedup key → last check time
 }
+
+// NudgeFunc is an optional callback for sending nudges to agents.
+type NudgeFunc func(ctx context.Context, agentName, message string) error
 
 // GitLabSyncConfig holds configuration for the GitLab sync watcher.
 type GitLabSyncConfig struct {
 	GitLab *GitLabClient
 	Daemon GitLabBeadClient
 	Logger *slog.Logger
+	Nudge  NudgeFunc // optional; if nil, nudges are skipped
 }
 
 // NewGitLabSync creates a new GitLab MR sync watcher.
@@ -48,16 +54,18 @@ func NewGitLabSync(cfg GitLabSyncConfig) *GitLabSync {
 		gitlab: cfg.GitLab,
 		daemon: cfg.Daemon,
 		logger: cfg.Logger,
+		nudge:  cfg.Nudge,
 		seen:   make(map[string]time.Time),
 	}
 }
 
 // RegisterHandlers registers SSE event handlers on the given stream.
-// Watches for bead updates where mr_url is set — triggers MR status check
-// and MR description sync.
+// Watches for bead updates where mr_url is set — triggers MR status check,
+// MR description sync, and review comment nudges.
 func (s *GitLabSync) RegisterHandlers(stream *SSEStream) {
 	stream.On("beads.bead.updated", s.handleUpdated)
 	stream.On("beads.bead.updated", s.handleDescriptionSync)
+	stream.On("beads.bead.updated", s.handleReviewNudge)
 	s.logger.Info("GitLab sync watcher registered SSE handlers",
 		"topics", []string{"beads.bead.updated"})
 }
@@ -193,6 +201,50 @@ func (s *GitLabSync) handleDescriptionSync(ctx context.Context, data []byte) {
 	if err := syncMRDescription(ctx, s.gitlab, ref.ProjectPath, ref.IID, section, s.logger); err != nil {
 		s.logger.Error("failed to sync MR description",
 			"bead", bead.ID, "mr_url", mrURL, "error", err)
+	}
+}
+
+// handleReviewNudge nudges the assigned agent when mr_has_review_comments
+// changes to true on a bead.
+func (s *GitLabSync) handleReviewNudge(ctx context.Context, data []byte) {
+	if s.nudge == nil {
+		return
+	}
+
+	bead := ParseBeadEvent(data)
+	if bead == nil || bead.Type != "task" {
+		return
+	}
+
+	// Only nudge when mr_has_review_comments just changed.
+	if bead.Changes == nil {
+		return
+	}
+	if _, ok := bead.Changes["mr_has_review_comments"]; !ok {
+		return
+	}
+	if bead.Fields["mr_has_review_comments"] != "true" {
+		return
+	}
+
+	assignee := bead.Assignee
+	if assignee == "" {
+		return
+	}
+
+	// Dedup: don't nudge the same agent too frequently for the same bead.
+	dedupKey := "gitlab-review-nudge:" + bead.ID
+	if s.isDuplicate(dedupKey) {
+		return
+	}
+
+	message := fmt.Sprintf("MR has new review comments — address them: %s", bead.Fields["mr_url"])
+	if err := s.nudge(ctx, assignee, message); err != nil {
+		s.logger.Error("failed to nudge agent for review comments",
+			"bead", bead.ID, "agent", assignee, "error", err)
+	} else {
+		s.logger.Info("nudged agent for MR review comments",
+			"bead", bead.ID, "agent", assignee)
 	}
 }
 
@@ -367,6 +419,16 @@ func GitLabWebhookHandler(gitlab *GitLabClient, daemon GitLabBeadClient, webhook
 				// Pipeline-specific fields (when object_kind=pipeline).
 				ID     int    `json:"id"`
 				Status string `json:"status"`
+				// Note-specific fields (when object_kind=note).
+				Note         string `json:"note"`
+				NoteableType string `json:"noteable_type"`
+				System       bool   `json:"system"`
+				Position     *struct {
+					NewPath string `json:"new_path"`
+					NewLine int    `json:"new_line"`
+					OldPath string `json:"old_path"`
+					OldLine int    `json:"old_line"`
+				} `json:"position"`
 			} `json:"object_attributes"`
 			MergeRequest *struct {
 				IID int    `json:"iid"`
@@ -381,6 +443,22 @@ func GitLabWebhookHandler(gitlab *GitLabClient, daemon GitLabBeadClient, webhook
 		}
 
 		switch event.ObjectKind {
+		case "note":
+			var pos *notePosition
+			if event.ObjectAttr.Position != nil {
+				pos = &notePosition{
+					NewPath: event.ObjectAttr.Position.NewPath,
+					NewLine: event.ObjectAttr.Position.NewLine,
+					OldPath: event.ObjectAttr.Position.OldPath,
+					OldLine: event.ObjectAttr.Position.OldLine,
+				}
+			}
+			handleNoteWebhook(r.Context(), event.ObjectAttr.NoteableType, event.ObjectAttr.Note,
+				event.ObjectAttr.System, event.User.Username, pos,
+				event.MergeRequest, daemon, logger)
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"status":"processed","kind":"note"}`)
+			return
 		case "pipeline":
 			handlePipelineWebhook(r.Context(), event.ObjectAttr.ID, event.ObjectAttr.Status, event.ObjectAttr.URL, event.MergeRequest, daemon, logger)
 			w.WriteHeader(http.StatusOK)
@@ -538,6 +616,81 @@ func handleApprovalWebhook(ctx context.Context, mrURL, action, username string, 
 		} else {
 			logger.Info("webhook: updated approval status on bead",
 				"bead", bead.ID, "action", action, "user", username)
+		}
+	}
+}
+
+// notePosition mirrors the GitLab note position object for inline review comments.
+type notePosition struct {
+	NewPath string `json:"new_path"`
+	NewLine int    `json:"new_line"`
+	OldPath string `json:"old_path"`
+	OldLine int    `json:"old_line"`
+}
+
+// handleNoteWebhook processes a GitLab note webhook event. It matches
+// MR review comments to beads and creates bead comments with the review feedback.
+func handleNoteWebhook(ctx context.Context, noteableType, note string, system bool, author string, position *notePosition, mr *struct {
+	IID int    `json:"iid"`
+	URL string `json:"url"`
+}, daemon GitLabBeadClient, logger *slog.Logger) {
+	// Only process MR discussion notes.
+	if noteableType != "MergeRequest" {
+		logger.Debug("webhook: note event is not for MergeRequest, skipping",
+			"noteable_type", noteableType)
+		return
+	}
+
+	// Skip system-generated notes (merge status changes, etc.).
+	if system {
+		logger.Debug("webhook: skipping system note")
+		return
+	}
+
+	if mr == nil || mr.URL == "" {
+		logger.Debug("webhook: note event has no merge_request, skipping")
+		return
+	}
+
+	logger.Info("webhook: MR review comment",
+		"mr_url", mr.URL, "author", author)
+
+	beads, err := daemon.ListTaskBeads(ctx)
+	if err != nil {
+		logger.Error("webhook: failed to list beads for note event", "error", err)
+		return
+	}
+
+	// Format the comment text for the bead.
+	var commentText strings.Builder
+	commentText.WriteString(fmt.Sprintf("**GitLab review comment** by @%s:\n\n", author))
+	if position != nil && position.NewPath != "" {
+		commentText.WriteString(fmt.Sprintf("`%s:%d`\n\n", position.NewPath, position.NewLine))
+	}
+	commentText.WriteString(note)
+
+	for _, bead := range beads {
+		if bead.Fields["mr_url"] != mr.URL {
+			continue
+		}
+
+		// Add comment to the bead.
+		if err := daemon.AddComment(ctx, bead.ID, "gitlab-bridge", commentText.String()); err != nil {
+			logger.Error("webhook: failed to add review comment to bead",
+				"bead", bead.ID, "error", err)
+			continue
+		}
+
+		// Set mr_has_review_comments flag.
+		fields := map[string]string{
+			"mr_has_review_comments": "true",
+		}
+		if err := daemon.UpdateBeadFields(ctx, bead.ID, fields); err != nil {
+			logger.Error("webhook: failed to set review comment flag on bead",
+				"bead", bead.ID, "error", err)
+		} else {
+			logger.Info("webhook: added review comment to bead",
+				"bead", bead.ID, "author", author, "mr_url", mr.URL)
 		}
 	}
 }
