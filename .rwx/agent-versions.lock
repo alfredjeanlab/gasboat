@@ -15,7 +15,7 @@ python=3.12
 claude-code=latest
 
 # ── Playwright ──────────────────────────────────────────────────────
-playwright=1.50.1
+playwright=1.58.2
 
 # ── CLIs (pinned for reproducibility) ───────────────────────────────
 docker-cli=27.5.1
