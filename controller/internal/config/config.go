@@ -158,6 +158,13 @@ type Config struct {
 	// (env: EXTERNAL_SECRET_REFRESH_INTERVAL). Default: "15m".
 	ExternalSecretRefreshInterval string
 
+	// --- Upgrade Drain ---
+
+	// UpgradeDrainTimeout is how long to wait for an agent to reach idle state
+	// after being nudged before force-deleting the pod (env: COOP_UPGRADE_DRAIN_TIMEOUT).
+	// Default: 5m.
+	UpgradeDrainTimeout time.Duration
+
 	// --- Controller ---
 
 	// LogLevel controls log verbosity: debug, info, warn, error (env: LOG_LEVEL).
@@ -233,6 +240,9 @@ func Parse() *Config {
 		LeaderElectionIdentity: envOr("POD_NAME", hostname()),
 
 		// Slack config removed — handled by standalone slack-bridge (bd-8x8fy).
+
+		// Upgrade Drain
+		UpgradeDrainTimeout: envDurationOr("COOP_UPGRADE_DRAIN_TIMEOUT", 5*time.Minute),
 
 		// ExternalSecret Reconciliation
 		ExternalSecretStoreName:       envOr("EXTERNAL_SECRET_STORE_NAME", "secretstore"),

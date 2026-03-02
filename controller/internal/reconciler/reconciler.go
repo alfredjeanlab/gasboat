@@ -182,6 +182,24 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 						"pod", name, "mode", bead.Mode, "reason", reason)
 					continue
 				}
+
+				// Graceful drain: nudge the agent to checkpoint before deleting.
+				// Derive the coop URL from the pod's IP.
+				coopURL := ""
+				if pod.Status.PodIP != "" {
+					coopURL = fmt.Sprintf("http://%s:8080", pod.Status.PodIP)
+				}
+
+				if coopURL != "" && r.cfg.UpgradeDrainTimeout > 0 {
+					// Start or continue drain.
+					r.upgradeTracker.StartDrain(ctx, name, coopURL)
+					if !r.upgradeTracker.DrainReady(ctx, name, r.cfg.UpgradeDrainTimeout) {
+						r.logger.Info("spec drift detected, draining agent before upgrade",
+							"pod", name, "mode", bead.Mode, "reason", reason)
+						continue
+					}
+				}
+
 				r.logger.Info("spec drift detected, upgrading pod",
 					"pod", name, "mode", bead.Mode, "reason", reason)
 				if err := r.pods.DeleteAgentPod(ctx, name, pod.Namespace); err != nil {
