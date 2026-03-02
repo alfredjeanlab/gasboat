@@ -159,20 +159,49 @@ func resolveSlackEnv() (bridgeURL, channel, threadTS string, err error) {
 	return bridgeURL, channel, threadTS, nil
 }
 
-// slackHTTPClient returns an HTTP client with a reasonable timeout.
-func slackHTTPClient() *http.Client {
-	return &http.Client{Timeout: 15 * time.Second}
+// isThreadSpawnedAgent returns true when both SLACK_THREAD_CHANNEL and
+// SLACK_THREAD_TS are set, indicating this agent was spawned from a Slack thread.
+func isThreadSpawnedAgent() bool {
+	return os.Getenv("SLACK_THREAD_CHANNEL") != "" && os.Getenv("SLACK_THREAD_TS") != ""
 }
 
-// printThreadMarkdown formats thread messages as markdown for context injection.
-func printThreadMarkdown(msgs []slackThreadMessage, maxChars int) {
+// fetchThreadMessages fetches thread messages from the bridge HTTP API.
+// Returns nil on any error (non-fatal for callers like prime).
+func fetchThreadMessages(bridgeURL, channel, threadTS string, limit int) []slackThreadMessage {
+	u := fmt.Sprintf("%s/api/slack/threads?channel=%s&ts=%s",
+		strings.TrimRight(bridgeURL, "/"),
+		url.QueryEscape(channel),
+		url.QueryEscape(threadTS))
+	if limit > 0 {
+		u += fmt.Sprintf("&limit=%d", limit)
+	}
+
+	resp, err := slackHTTPClient().Get(u)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	var msgs []slackThreadMessage
+	if err := json.NewDecoder(resp.Body).Decode(&msgs); err != nil {
+		return nil
+	}
+	return msgs
+}
+
+// formatThreadMarkdown formats thread messages as markdown, returning the string.
+// maxChars controls truncation (default 4000 if <= 0).
+func formatThreadMarkdown(msgs []slackThreadMessage, maxChars int) string {
 	if maxChars <= 0 {
 		maxChars = 4000
 	}
 
 	if len(msgs) == 0 {
-		fmt.Println("(No thread messages)")
-		return
+		return "(No thread messages)\n"
 	}
 
 	var buf strings.Builder
@@ -184,7 +213,17 @@ func printThreadMarkdown(msgs []slackThreadMessage, maxChars int) {
 		}
 		buf.WriteString(line)
 	}
-	fmt.Print(buf.String())
+	return buf.String()
+}
+
+// slackHTTPClient returns an HTTP client with a reasonable timeout.
+func slackHTTPClient() *http.Client {
+	return &http.Client{Timeout: 15 * time.Second}
+}
+
+// printThreadMarkdown formats thread messages as markdown for context injection.
+func printThreadMarkdown(msgs []slackThreadMessage, maxChars int) {
+	fmt.Print(formatThreadMarkdown(msgs, maxChars))
 }
 
 func init() {
