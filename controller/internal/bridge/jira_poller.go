@@ -23,6 +23,7 @@ type JiraBeadClient interface {
 	CreateBead(ctx context.Context, req beadsapi.CreateBeadRequest) (string, error)
 	ListTaskBeads(ctx context.Context) ([]*beadsapi.BeadDetail, error)
 	AddDependency(ctx context.Context, beadID, dependsOnID, depType, createdBy string) error
+	UpdateBeadFields(ctx context.Context, beadID string, fields map[string]string) error
 }
 
 // JiraPollerConfig holds configuration for the JIRA poller.
@@ -314,6 +315,11 @@ func (p *JiraPoller) createBeadFromIssue(ctx context.Context, issue JiraIssue) (
 		fields["jira_reporter"] = issue.Fields.Reporter.DisplayName
 	}
 
+	// Issue link count for graph visibility.
+	if len(issue.Fields.IssueLinks) > 0 {
+		fields["jira_link_count"] = fmt.Sprintf("%d", len(issue.Fields.IssueLinks))
+	}
+
 	// Attachment metadata for beads3d media indicators.
 	if len(issue.Fields.Attachments) > 0 {
 		fields["jira_attachment_count"] = fmt.Sprintf("%d", len(issue.Fields.Attachments))
@@ -408,6 +414,8 @@ func (p *JiraPoller) wireDependencies(ctx context.Context, issues []JiraIssue) {
 	}
 
 	// Pass B: issue link edges.
+	// Collect cross-project / unresolvable links per source bead.
+	xlinks := make(map[string][]string) // bead ID → []"type:KEY"
 	for _, issue := range issues {
 		srcID, srcOK := snapshot[issue.Key]
 		if !srcOK {
@@ -429,7 +437,8 @@ func (p *JiraPoller) wireDependencies(ctx context.Context, issues []JiraIssue) {
 
 			targetID, targetOK := snapshot[targetKey]
 			if !targetOK {
-				// Target not yet imported — skip silently.
+				// Target not imported — store as cross-project link field.
+				xlinks[srcID] = append(xlinks[srcID], depType+":"+targetKey)
 				continue
 			}
 
@@ -444,6 +453,16 @@ func (p *JiraPoller) wireDependencies(ctx context.Context, issues []JiraIssue) {
 			}
 			p.wiredDeps[dedupKey] = true
 			wired++
+		}
+	}
+
+	// Store cross-project links as a field on each source bead.
+	for beadID, links := range xlinks {
+		if err := p.daemon.UpdateBeadFields(ctx, beadID, map[string]string{
+			"jira_xlinks": strings.Join(links, ","),
+		}); err != nil {
+			p.cfg.Logger.Warn("failed to store cross-project links",
+				"bead", beadID, "links", links, "error", err)
 		}
 	}
 

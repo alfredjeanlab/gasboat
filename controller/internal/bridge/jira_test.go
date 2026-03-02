@@ -78,6 +78,19 @@ func (m *mockJiraDaemon) AddDependency(_ context.Context, beadID, dependsOnID, d
 	return nil
 }
 
+func (m *mockJiraDaemon) UpdateBeadFields(_ context.Context, beadID string, fields map[string]string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	bead, ok := m.beads[beadID]
+	if !ok {
+		return fmt.Errorf("bead %s not found", beadID)
+	}
+	for k, v := range fields {
+		bead.Fields[k] = v
+	}
+	return nil
+}
+
 func (m *mockJiraDaemon) getDeps() []depRecord {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -452,6 +465,16 @@ func TestJiraPoller_IssueLinks(t *testing.T) {
 	if deps[0].DepType != "blocks" {
 		t.Errorf("expected blocks, got %s", deps[0].DepType)
 	}
+
+	// Verify jira_link_count was stored on the bead with links.
+	beads := daemon.getBeads()
+	for _, b := range beads {
+		if b.Fields["jira_key"] == "PE-100" {
+			if b.Fields["jira_link_count"] != "1" {
+				t.Errorf("jira_link_count=%s, want 1", b.Fields["jira_link_count"])
+			}
+		}
+	}
 }
 
 func TestJiraPoller_IssueLinks_TargetMissing(t *testing.T) {
@@ -487,6 +510,16 @@ func TestJiraPoller_IssueLinks_TargetMissing(t *testing.T) {
 	deps := daemon.getDeps()
 	if len(deps) != 0 {
 		t.Errorf("expected 0 dependencies for missing target, got %d", len(deps))
+	}
+
+	// Cross-project link stored as field.
+	beads := daemon.getBeads()
+	var bead *beadsapi.BeadDetail
+	for _, b := range beads {
+		bead = b
+	}
+	if bead.Fields["jira_xlinks"] != "relates:PE-999" {
+		t.Errorf("jira_xlinks=%q, want %q", bead.Fields["jira_xlinks"], "relates:PE-999")
 	}
 }
 
