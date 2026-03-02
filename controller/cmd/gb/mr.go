@@ -114,6 +114,18 @@ func runMRStatus(cmd *cobra.Command, args []string) error {
 			cmd.Printf("          %s\n", mr.HeadPipeline.WebURL)
 		}
 	}
+
+	// Show bead-side approval info if the arg was a bead ID.
+	if !strings.HasPrefix(args[0], "http://") && !strings.HasPrefix(args[0], "https://") {
+		if bead, err := daemon.GetBead(cmd.Context(), args[0]); err == nil {
+			if approved := bead.Fields["mr_approved"]; approved != "" {
+				cmd.Printf("Approved: %s\n", approved)
+			}
+			if approvers := bead.Fields["mr_approvers"]; approvers != "" {
+				cmd.Printf("Approvers: %s\n", approvers)
+			}
+		}
+	}
 	return nil
 }
 

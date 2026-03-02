@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -282,6 +283,9 @@ func GitLabWebhookHandler(gitlab *GitLabClient, daemon GitLabBeadClient, webhook
 
 		var event struct {
 			ObjectKind string `json:"object_kind"`
+			User       struct {
+				Username string `json:"username"`
+			} `json:"user"`
 			ObjectAttr struct {
 				IID       int    `json:"iid"`
 				State     string `json:"state"`
@@ -311,8 +315,15 @@ func GitLabWebhookHandler(gitlab *GitLabClient, daemon GitLabBeadClient, webhook
 			fmt.Fprintf(w, `{"status":"processed","kind":"pipeline"}`)
 			return
 		case "merge_request":
-			// Only process merge events.
-			if event.ObjectAttr.Action != "merge" {
+			switch event.ObjectAttr.Action {
+			case "merge":
+				// Fall through to merge handling below.
+			case "approved", "unapproved":
+				handleApprovalWebhook(r.Context(), event.ObjectAttr.URL, event.ObjectAttr.Action, event.User.Username, daemon, logger)
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprintf(w, `{"status":"processed","action":"%s"}`, event.ObjectAttr.Action)
+				return
+			default:
 				w.WriteHeader(http.StatusOK)
 				fmt.Fprintf(w, `{"status":"ignored","reason":"action=%s"}`, event.ObjectAttr.Action)
 				return
@@ -409,4 +420,74 @@ func handlePipelineWebhook(ctx context.Context, pipelineID int, status, pipeline
 				"bead", bead.ID, "status", status, "pipeline_id", pipelineID)
 		}
 	}
+}
+
+// handleApprovalWebhook processes MR approved/unapproved webhook events.
+func handleApprovalWebhook(ctx context.Context, mrURL, action, username string, daemon GitLabBeadClient, logger *slog.Logger) {
+	if mrURL == "" {
+		return
+	}
+
+	logger.Info("webhook: MR approval event",
+		"mr_url", mrURL, "action", action, "user", username)
+
+	beads, err := daemon.ListTaskBeads(ctx)
+	if err != nil {
+		logger.Error("webhook: failed to list beads for approval event", "error", err)
+		return
+	}
+
+	for _, bead := range beads {
+		if bead.Fields["mr_url"] != mrURL {
+			continue
+		}
+
+		fields := map[string]string{}
+
+		switch action {
+		case "approved":
+			fields["mr_approved"] = "true"
+			// Append approver to comma-separated list.
+			existing := bead.Fields["mr_approvers"]
+			if existing == "" {
+				fields["mr_approvers"] = username
+			} else if !containsApprover(existing, username) {
+				fields["mr_approvers"] = existing + "," + username
+			}
+		case "unapproved":
+			fields["mr_approved"] = "false"
+			// Remove approver from list.
+			fields["mr_approvers"] = removeApprover(bead.Fields["mr_approvers"], username)
+		}
+
+		if err := daemon.UpdateBeadFields(ctx, bead.ID, fields); err != nil {
+			logger.Error("webhook: failed to update approval status on bead",
+				"bead", bead.ID, "error", err)
+		} else {
+			logger.Info("webhook: updated approval status on bead",
+				"bead", bead.ID, "action", action, "user", username)
+		}
+	}
+}
+
+// containsApprover checks if username is in the comma-separated approvers list.
+func containsApprover(approvers, username string) bool {
+	for _, a := range strings.Split(approvers, ",") {
+		if strings.TrimSpace(a) == username {
+			return true
+		}
+	}
+	return false
+}
+
+// removeApprover removes username from the comma-separated approvers list.
+func removeApprover(approvers, username string) string {
+	var result []string
+	for _, a := range strings.Split(approvers, ",") {
+		a = strings.TrimSpace(a)
+		if a != "" && a != username {
+			result = append(result, a)
+		}
+	}
+	return strings.Join(result, ",")
 }
