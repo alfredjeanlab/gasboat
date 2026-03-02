@@ -62,7 +62,7 @@ RUN set -e && \
     fi && \
     case "${TARGETARCH}" in arm64) BD_ARCH=arm64 ;; *) BD_ARCH=amd64 ;; esac && \
     curl -fsSL "https://github.com/groblegark/kbeads/releases/download/${BEADS_VERSION}/kd_${BEADS_VERSION}_linux_${BD_ARCH}.tar.gz" \
-      | tar -xz -C /usr/local/bin kd
+      | tar -xz -C /usr/local/bin ./kd
 
 # ── Gasboat CLI (gb) — agent orchestration ──────────────────────
 COPY --from=gb-builder /gb /usr/local/bin/gb
