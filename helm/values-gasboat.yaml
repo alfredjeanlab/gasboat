@@ -1,3 +1,31 @@
+beads3d:
+  daemon:
+    url: http://gasboat-beads:8080
+  daemonTokenSecret: kd-beads-token
+  enabled: true
+  image:
+    pullPolicy: Always
+    repository: ghcr.io/groblegark/beads3d
+    tag: latest
+  imagePullSecrets:
+    - name: ghcr-registry
+  ingress:
+    basicAuth:
+      enabled: true
+      secret: gasboat-basic-auth
+    enabled: true
+    host: beads3d.gasboat.app.e2e.dev.fics.ai
+    ipWhitelist:
+      enabled: false
+  nodeSelector:
+    kubernetes.io/arch: amd64
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
 agents:
   affinity:
     nodeAffinity:
@@ -46,6 +74,8 @@ agents:
   gitlabTokenSecret: gitlab-token
   image:
     repository: ghcr.io/groblegark/gasboat/controller
+  nodeSelector:
+    kubernetes.io/arch: amd64
   rwxAccessTokenExternalSecret:
     enabled: true
     refreshInterval: 15m
@@ -67,6 +97,8 @@ beads:
       average: 50
       burst: 100
       enabled: true
+  nodeSelector:
+    kubernetes.io/arch: amd64
   replicaCount: 1
   resources:
     limits:
@@ -101,6 +133,8 @@ coopmux:
       enabled: false
   mux:
     port: 9800
+  nodeSelector:
+    kubernetes.io/arch: amd64
   persistence:
     enabled: true
     size: 100Mi
@@ -120,8 +154,6 @@ externalSecrets:
 global:
   basicAuth:
     secret: gasboat-basic-auth
-  nodeSelector:
-    kubernetes.io/arch: amd64
 imagePullSecrets:
   - name: ghcr-registry
 jiraBridge:
@@ -131,13 +163,16 @@ jiraBridge:
     repository: ghcr.io/groblegark/gasboat/jira-bridge
   jira:
     baseURL: https://pihealth.atlassian.net
+    boatProjects: monorepo=placeholder:PE,monorepo=placeholder:DEVOPS
     email: matthew.baker@pihealth.ai
-    issueTypes: Bug,Task,Story
+    issueTypes: Bug,Task,Story,Epic
     pollInterval: 60s
     projects: PE,DEVOPS
     secretName: jira-api-token
     statuses: To Do,Ready for Development
   logLevel: debug
+  nodeSelector:
+    kubernetes.io/arch: amd64
   replicaCount: 1
   resources:
     limits:
@@ -188,6 +223,8 @@ postgres:
     pullPolicy: IfNotPresent
     repository: postgres
     tag: 17-alpine
+  nodeSelector:
+    kubernetes.io/arch: amd64
   persistence:
     enabled: true
     size: 10Gi
@@ -215,6 +252,8 @@ slackBridge:
   image:
     repository: ghcr.io/groblegark/gasboat/slack-bridge
   logLevel: debug
+  nodeSelector:
+    kubernetes.io/arch: amd64
   replicaCount: 1
   resources:
     limits:
@@ -227,7 +266,7 @@ slackBridge:
     port: 8090
     type: ClusterIP
   slack:
-    channel: C0AH2NBNQSD
+    channel: C0AHE7C0E1G
     secretName: slack-bot-credentials
 tls:
   dns:
@@ -235,24 +274,22 @@ tls:
   domainName: '*.gasboat.app.e2e.dev.fics.ai'
   enabled: true
   issuer: letsencrypt-production
-beads3d:
-  daemon:
-    url: http://gasboat-beads:8080
+gitlabBridge:
   enabled: true
   image:
     pullPolicy: Always
-    repository: ghcr.io/groblegark/kbeads3d
-    tag: latest
-  imagePullSecrets:
-    - name: ghcr-registry
-  ingress:
-    basicAuth:
-      enabled: true
-      secret: gasboat-basic-auth
-    enabled: true
-    host: beads3d.gasboat.app.e2e.dev.fics.ai
-    ipWhitelist:
-      enabled: false
+    repository: ghcr.io/groblegark/gasboat/gitlab-bridge
+    tag: main
+  gitlab:
+    baseURL: https://gitlab.com
+    secretName: gitlab-token
+    secretKey: token
+    groupID: "14176856"
+    pollInterval: 5m
+  logLevel: debug
+  nodeSelector:
+    kubernetes.io/arch: amd64
+  replicaCount: 1
   resources:
     limits:
       cpu: 200m
@@ -260,3 +297,6 @@ beads3d:
     requests:
       cpu: 50m
       memory: 64Mi
+  service:
+    port: 8092
+    type: ClusterIP
