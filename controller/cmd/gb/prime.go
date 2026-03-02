@@ -413,6 +413,13 @@ func outputAutoAssign(w io.Writer, agentID string) {
 	if os.Getenv("BOAT_TASK_ID") != "" {
 		return
 	}
+
+	// Require a project context to prevent cross-project assignment.
+	proj := defaultGBProject()
+	if proj == "" {
+		return // no project context — refuse to auto-assign
+	}
+
 	ctx := context.Background()
 
 	// Check if agent already has in_progress work.
@@ -425,14 +432,11 @@ func outputAutoAssign(w io.Writer, agentID string) {
 		return // agent already has work
 	}
 
-	// Fetch ready tasks scoped to this agent's project.
-	var labels []string
-	if proj := defaultGBProject(); proj != "" {
-		labels = append(labels, "project:"+proj)
-	}
+	// Fetch ready issue-kind tasks scoped to this agent's project.
 	ready, err := daemon.ListBeadsFiltered(ctx, beadsapi.ListBeadsQuery{
 		Statuses:   []string{"open"},
-		Labels:     labels,
+		Labels:     []string{"project:" + proj},
+		Kinds:      []string{"issue"},
 		NoOpenDeps: true,
 		Sort:       "priority",
 		Limit:      1,
@@ -441,8 +445,22 @@ func outputAutoAssign(w io.Writer, agentID string) {
 		return
 	}
 
-	// Auto-claim.
+	// Verify the candidate bead actually belongs to our project.
+	// Belt-and-suspenders check: the server filters by label, but we
+	// double-check client-side to avoid cross-project assignment.
 	task := ready.Beads[0]
+	hasProjectLabel := false
+	for _, l := range task.Labels {
+		if l == "project:"+proj {
+			hasProjectLabel = true
+			break
+		}
+	}
+	if !hasProjectLabel {
+		return
+	}
+
+	// Auto-claim.
 	inProgress := "in_progress"
 	err = daemon.UpdateBead(ctx, task.ID, beadsapi.UpdateBeadRequest{
 		Assignee: &agentID,

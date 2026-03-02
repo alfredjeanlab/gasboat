@@ -11,6 +11,7 @@ import (
 // ListBeadsQuery contains the full set of query parameters for listing beads.
 type ListBeadsQuery struct {
 	Types      []string // Filter by bead types (e.g., "decision", "mail")
+	Kinds      []string // Filter by bead kinds (e.g., "issue", "data", "config")
 	Statuses   []string // Filter by statuses (e.g., "open", "closed")
 	Labels     []string // Filter by labels
 	Assignee   string   // Filter by assignee
@@ -32,6 +33,9 @@ func (c *Client) ListBeadsFiltered(ctx context.Context, q ListBeadsQuery) (*List
 	params := url.Values{}
 	if len(q.Types) > 0 {
 		params.Set("type", strings.Join(q.Types, ","))
+	}
+	if len(q.Kinds) > 0 {
+		params.Set("kind", strings.Join(q.Kinds, ","))
 	}
 	if len(q.Statuses) > 0 {
 		params.Set("status", strings.Join(q.Statuses, ","))
