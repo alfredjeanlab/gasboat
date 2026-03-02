@@ -84,6 +84,14 @@ func (b *Bot) NotifyDecision(ctx context.Context, bead BeadEvent) error {
 		))
 	}
 
+	// Decision context — additional background provided by the agent.
+	if decisionCtx := bead.Fields["context"]; decisionCtx != "" {
+		blocks = append(blocks,
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn", decisionCtx, false, false),
+				nil, nil))
+	}
+
 	// Context block — skip entirely in threaded mode since the parent card shows it.
 	if b.agentThreadingEnabled() && agent != "" {
 		// No context block needed — the thread parent card provides agent context.

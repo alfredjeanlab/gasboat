@@ -458,104 +458,152 @@ func TestDecisionQuestion(t *testing.T) {
 	}
 }
 
-func TestDecisions_HandleReportClosed(t *testing.T) {
+func TestDecisions_HandleReportClosed_PostsReport(t *testing.T) {
 	daemon := newMockDaemon()
 	notif := &mockNotifier{}
+	d := NewDecisions(DecisionsConfig{
+		Daemon:   daemon,
+		Notifier: notif,
+		Logger:   slog.Default(),
+	})
 
-	d := &Decisions{
-		daemon:   daemon,
-		notifier: notif,
-		logger:   slog.Default(),
-	}
-
-	// Simulate a report bead close event with all fields present.
-	event := marshalSSEBeadPayload(BeadEvent{
-		ID:   "rpt-1",
+	closedEvent := marshalSSEBeadPayload(BeadEvent{
+		ID:   "report-1",
 		Type: "report",
 		Fields: map[string]string{
-			"decision_id": "dec-100",
+			"decision_id": "dec-42",
 			"report_type": "plan",
-			"content":     "Step 1: do X\nStep 2: do Y",
+			"content":     "Here is the implementation plan.",
 		},
 	})
-	d.handleReportClosed(context.Background(), event)
+	d.handleReportClosed(context.Background(), closedEvent)
 
 	reports := notif.getReports()
 	if len(reports) != 1 {
-		t.Fatalf("expected 1 report call, got %d", len(reports))
+		t.Fatalf("expected 1 PostReport call, got %d", len(reports))
 	}
-	if reports[0].DecisionID != "dec-100" {
-		t.Errorf("decision_id = %q, want dec-100", reports[0].DecisionID)
+	if reports[0].DecisionID != "dec-42" {
+		t.Errorf("expected decision_id=dec-42, got %s", reports[0].DecisionID)
 	}
 	if reports[0].ReportType != "plan" {
-		t.Errorf("report_type = %q, want plan", reports[0].ReportType)
+		t.Errorf("expected report_type=plan, got %s", reports[0].ReportType)
 	}
-	if reports[0].Content != "Step 1: do X\nStep 2: do Y" {
-		t.Errorf("content = %q", reports[0].Content)
+	if reports[0].Content != "Here is the implementation plan." {
+		t.Errorf("expected content mismatch, got %q", reports[0].Content)
 	}
 }
 
 func TestDecisions_HandleReportClosed_FetchesMissingFields(t *testing.T) {
 	daemon := newMockDaemon()
-	// Pre-populate daemon with the report bead so handleReportClosed can fetch it.
-	daemon.beads["rpt-2"] = &beadsapi.BeadDetail{
-		ID:   "rpt-2",
+	// Full bead in daemon has the content; SSE event does not.
+	daemon.beads["report-2"] = &beadsapi.BeadDetail{
+		ID:   "report-2",
 		Type: "report",
 		Fields: map[string]string{
-			"decision_id": "dec-200",
+			"decision_id": "dec-99",
 			"report_type": "checklist",
-			"content":     "[ ] verify auth\n[ ] verify logging",
+			"content":     "Fetched from daemon.",
 		},
 	}
 	notif := &mockNotifier{}
+	d := NewDecisions(DecisionsConfig{
+		Daemon:   daemon,
+		Notifier: notif,
+		Logger:   slog.Default(),
+	})
 
-	d := &Decisions{
-		daemon:   daemon,
-		notifier: notif,
-		logger:   slog.Default(),
-	}
-
-	// SSE event with fields stripped (content and decision_id missing).
-	event := marshalSSEBeadPayload(BeadEvent{
-		ID:     "rpt-2",
+	// SSE event has no content or decision_id — triggers GetBead fallback.
+	closedEvent := marshalSSEBeadPayload(BeadEvent{
+		ID:     "report-2",
 		Type:   "report",
 		Fields: map[string]string{},
 	})
-	d.handleReportClosed(context.Background(), event)
+	d.handleReportClosed(context.Background(), closedEvent)
 
 	reports := notif.getReports()
 	if len(reports) != 1 {
-		t.Fatalf("expected 1 report call after fetch, got %d", len(reports))
+		t.Fatalf("expected 1 PostReport call, got %d", len(reports))
 	}
-	if reports[0].DecisionID != "dec-200" {
-		t.Errorf("decision_id = %q, want dec-200", reports[0].DecisionID)
+	if reports[0].DecisionID != "dec-99" {
+		t.Errorf("expected decision_id=dec-99, got %s", reports[0].DecisionID)
 	}
-	if reports[0].Content != "[ ] verify auth\n[ ] verify logging" {
-		t.Errorf("content = %q", reports[0].Content)
+	if reports[0].Content != "Fetched from daemon." {
+		t.Errorf("expected fetched content, got %q", reports[0].Content)
 	}
 }
 
-func TestDecisions_HandleReportClosed_SkipsNonReport(t *testing.T) {
+func TestDecisions_HandleReportClosed_IgnoresNonReport(t *testing.T) {
 	notif := &mockNotifier{}
+	d := NewDecisions(DecisionsConfig{
+		Notifier: notif,
+		Logger:   slog.Default(),
+	})
 
-	d := &Decisions{
-		notifier: notif,
-		logger:   slog.Default(),
-	}
-
-	// A decision bead close event should not trigger PostReport.
-	event := marshalSSEBeadPayload(BeadEvent{
-		ID:   "dec-300",
+	// Decision bead close should be ignored by handleReportClosed.
+	closedEvent := marshalSSEBeadPayload(BeadEvent{
+		ID:   "dec-1",
 		Type: "decision",
 		Fields: map[string]string{
-			"decision_id": "dec-300",
-			"content":     "some content",
+			"chosen": "yes",
 		},
 	})
-	d.handleReportClosed(context.Background(), event)
+	d.handleReportClosed(context.Background(), closedEvent)
 
 	if len(notif.getReports()) != 0 {
-		t.Error("expected no report calls for non-report bead")
+		t.Fatal("non-report bead should not trigger PostReport")
+	}
+}
+
+func TestDecisions_HandleReportClosed_NoDecisionID(t *testing.T) {
+	notif := &mockNotifier{}
+	d := NewDecisions(DecisionsConfig{
+		Notifier: notif,
+		Logger:   slog.Default(),
+	})
+
+	// Report with no decision_id should be skipped.
+	closedEvent := marshalSSEBeadPayload(BeadEvent{
+		ID:   "report-3",
+		Type: "report",
+		Fields: map[string]string{
+			"content": "orphan report",
+		},
+	})
+	d.handleReportClosed(context.Background(), closedEvent)
+
+	if len(notif.getReports()) != 0 {
+		t.Fatal("report without decision_id should not trigger PostReport")
+	}
+}
+
+func TestDecisions_HandleCreated_ContextFieldPassedThrough(t *testing.T) {
+	notif := &mockNotifier{}
+	d := &Decisions{
+		notifier:  notif,
+		logger:    slog.Default(),
+		escalated: make(map[string]time.Time),
+	}
+
+	// Decision bead with context field should pass it through to the notifier.
+	decision := marshalSSEBeadPayload(BeadEvent{
+		ID:       "dec-ctx-1",
+		Type:     "decision",
+		Title:    "Choose deployment strategy",
+		Assignee: "crew-test",
+		Fields: map[string]string{
+			"prompt":  "Which deployment strategy?",
+			"options": `["blue-green","canary"]`,
+			"context": "We need to deploy the auth service update. Current system handles 10k RPM.",
+		},
+	})
+	d.handleCreated(context.Background(), decision)
+
+	created := notif.getCreated()
+	if len(created) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(created))
+	}
+	if created[0].Fields["context"] != "We need to deploy the auth service update. Current system handles 10k RPM." {
+		t.Errorf("expected context field to be passed through, got %q", created[0].Fields["context"])
 	}
 }
 
