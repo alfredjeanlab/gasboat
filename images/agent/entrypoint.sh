@@ -542,14 +542,17 @@ inject_initial_prompt() {
         project_hint=" Focus on tasks for project \`${PROJECT}\` — skip work that belongs to a different project unless you are explicitly assigned to it."
     fi
 
-    # If spawned with a pre-assigned task (dependency type "assigned"), use it as context.
+    # If spawned with a pre-assigned task, tell the agent to claim it directly.
+    # BOAT_TASK_ID is set by the controller when SpawnAgent receives a taskID.
+    # Falls back to the dep-list lookup for agents spawned before this change.
     local task_hint=""
-    if [ -n "${BOAT_AGENT_BEAD_ID:-}" ] && command -v kd &>/dev/null; then
+    local assigned_task="${BOAT_TASK_ID:-}"
+    if [ -z "${assigned_task}" ] && [ -n "${BOAT_AGENT_BEAD_ID:-}" ] && command -v kd &>/dev/null; then
         assigned_task=$(kd dep list "${BOAT_AGENT_BEAD_ID}" --json 2>/dev/null \
             | jq -r '.[] | select(.type=="assigned") | .depends_on_id' 2>/dev/null | head -1)
-        if [ -n "${assigned_task}" ]; then
-            task_hint=" You have been pre-assigned to task \`${assigned_task}\`. Run \`kd show ${assigned_task}\` for details, then \`kd claim ${assigned_task}\` to start work on it."
-        fi
+    fi
+    if [ -n "${assigned_task}" ]; then
+        task_hint=" You have been pre-assigned to task \`${assigned_task}\`. Run \`kd show ${assigned_task}\` for details, then \`kd claim ${assigned_task}\` to start work on it."
     fi
 
     local nudge_msg="Check \`gb ready\` for your workflow steps and begin working.${project_hint}${task_hint} IMPORTANT: (1) Run \`gb news\` first to see what your teammates are already working on — do not duplicate in-progress work. (2) Run \`kd claim <id>\` BEFORE starting any task — this atomically marks it in_progress so no other agent picks it up simultaneously."

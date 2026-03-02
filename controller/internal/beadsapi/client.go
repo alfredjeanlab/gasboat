@@ -297,6 +297,9 @@ func (c *Client) SpawnAgent(ctx context.Context, agentName, project, taskID, rol
 		"role":    role,
 		"project": project,
 	}
+	if taskID != "" {
+		fields["task_id"] = taskID
+	}
 	fieldsJSON, err := json.Marshal(fields)
 	if err != nil {
 		return "", fmt.Errorf("marshalling agent fields: %w", err)

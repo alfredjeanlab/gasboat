@@ -40,6 +40,7 @@ func BuildSpecFromBeadInfo(cfg *config.Config, project, mode, role, agentName st
 		Mode:      mode,
 		Role:      role,
 		AgentName: agentName,
+		TaskID:    metadata["task_id"],
 		Image:     image,
 		Namespace: cfg.Namespace,
 		Env: map[string]string{
@@ -83,6 +84,7 @@ func buildAgentPodSpec(cfg *config.Config, event subscriber.Event) podmanager.Ag
 		Role:      event.Role,
 		AgentName: event.AgentName,
 		BeadID:    event.BeadID,
+		TaskID:    event.Metadata["task_id"],
 		Image:     event.Metadata["image"],
 		Namespace: ns,
 		Env: map[string]string{

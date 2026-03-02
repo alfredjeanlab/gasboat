@@ -407,8 +407,12 @@ func outputRosterSection(w io.Writer, self string) {
 }
 
 // outputAutoAssign checks if the agent has in_progress beads and auto-assigns
-// the highest-priority ready task if idle.
+// the highest-priority ready task if idle. Skips if BOAT_TASK_ID is set (the
+// agent was spawned with a specific pre-assigned task).
 func outputAutoAssign(w io.Writer, agentID string) {
+	if os.Getenv("BOAT_TASK_ID") != "" {
+		return
+	}
 	ctx := context.Background()
 
 	// Check if agent already has in_progress work.

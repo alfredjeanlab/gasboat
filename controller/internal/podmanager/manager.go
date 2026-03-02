@@ -94,6 +94,7 @@ type AgentPodSpec struct {
 	Role      string // functional role from role bead (e.g., "devops", "qa")
 	AgentName string
 	BeadID    string // canonical bead ID (written to gasboat.io/bead-id annotation)
+	TaskID    string // optional pre-assigned task bead ID (set as BOAT_TASK_ID env var)
 	Image     string
 	Namespace string
 	Env       map[string]string
@@ -455,6 +456,12 @@ func (m *K8sManager) buildEnvVars(spec AgentPodSpec) []corev1.EnvVar {
 		corev1.EnvVar{Name: "BEADS_AGENT_NAME", Value: fmt.Sprintf("%s/%s", spec.Project, spec.AgentName)},
 		corev1.EnvVar{Name: "BOAT_AGENT_BEAD_ID", Value: spec.BeadID},
 	)
+
+	// Pre-assigned task: set BOAT_TASK_ID so the entrypoint nudges the agent
+	// to claim a specific task instead of discovering work via gb ready.
+	if spec.TaskID != "" {
+		envVars = append(envVars, corev1.EnvVar{Name: "BOAT_TASK_ID", Value: spec.TaskID})
+	}
 
 	// Add plain env vars from spec.
 	for k, v := range spec.Env {
