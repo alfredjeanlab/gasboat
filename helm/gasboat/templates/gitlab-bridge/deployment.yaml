@@ -35,6 +35,11 @@ spec:
             # Beads daemon connection
             - name: BEADS_HTTP_ADDR
               value: "http://{{ include "gasboat.beads.host" . }}:{{ include "gasboat.beads.httpPort" . }}"
+            - name: BEADS_DAEMON_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.beads.tokenSecret | default "kd-beads-token" }}
+                  key: token
             # GitLab connection
             {{- if .Values.gitlabBridge.gitlab.baseURL }}
             - name: GITLAB_BASE_URL

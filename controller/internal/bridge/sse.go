@@ -26,6 +26,7 @@ import (
 type SSEStream struct {
 	baseURL    string
 	topics     []string
+	token      string // optional bearer token for kbeads auth
 	logger     *slog.Logger
 	httpClient *http.Client // reused across reconnections (long-lived, no timeout)
 
@@ -45,6 +46,8 @@ type SSEStreamConfig struct {
 	BeadsHTTPAddr string
 	// Topics is the list of topic patterns to subscribe to.
 	Topics []string
+	// Token is the optional bearer token for kbeads authentication.
+	Token string
 	// Logger for diagnostic output.
 	Logger *slog.Logger
 	// Dedup is an optional event deduplicator for preventing duplicate notifications.
@@ -58,6 +61,7 @@ func NewSSEStream(cfg SSEStreamConfig) *SSEStream {
 	s := &SSEStream{
 		baseURL:    strings.TrimRight(cfg.BeadsHTTPAddr, "/"),
 		topics:     cfg.Topics,
+		token:      cfg.Token,
 		logger:     cfg.Logger,
 		httpClient: &http.Client{Timeout: 0}, // no timeout for long-lived SSE
 		handlers:   make(map[string][]SSEHandler),
@@ -140,6 +144,9 @@ func (s *SSEStream) stream(ctx context.Context) error {
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
+	if s.token != "" {
+		req.Header.Set("Authorization", "Bearer "+s.token)
+	}
 	lastID := s.LastID()
 	if lastID != "" {
 		req.Header.Set("Last-Event-ID", lastID)

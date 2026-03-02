@@ -189,6 +189,7 @@ func main() {
 	sseStream := bridge.NewSSEStream(bridge.SSEStreamConfig{
 		BeadsHTTPAddr: cfg.beadsHTTPAddr,
 		Topics:        []string{"beads.bead.created", "beads.bead.closed", "beads.bead.updated"},
+		Token:         os.Getenv("BEADS_DAEMON_TOKEN"),
 		Logger:        logger,
 		Dedup:         dedup,
 		State:         state,
