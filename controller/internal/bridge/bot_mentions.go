@@ -40,9 +40,24 @@ func (b *Bot) handleAppMention(ctx context.Context, ev *slackevents.AppMentionEv
 	replyTS := ev.ThreadTimeStamp // timestamp to thread the confirmation reply under
 
 	// Priority 1: Check if the first word is an agent name.
+	var agentPodName string // for coopmux terminal link
 	if resolved, remaining := b.resolveAgentFromText(ctx, text); resolved != "" {
+		// Validate the agent is active via FindAgentBead.
+		agentBead, err := b.daemon.FindAgentBead(ctx, extractAgentName(resolved))
+		if err != nil {
+			b.logger.Info("mention: agent name resolved but not active",
+				"agent", resolved, "channel", ev.Channel, "error", err)
+			if b.api != nil {
+				_, _ = b.api.PostEphemeral(ev.Channel, ev.User,
+					slack.MsgOptionText(
+						fmt.Sprintf(":x: No active agent named *%s*", extractAgentName(resolved)),
+						false))
+			}
+			return
+		}
 		agent = resolved
 		text = remaining
+		agentPodName = beadsapi.ParseNotes(agentBead.Notes)["pod_name"]
 		b.logger.Info("mention: resolved agent from text",
 			"agent", agent, "channel", ev.Channel)
 	}
@@ -126,9 +141,16 @@ func (b *Bot) handleAppMention(ctx context.Context, ev *slackevents.AppMentionEv
 	b.nudgeAgentForMention(ctx, agent, text, beadID)
 
 	// Post confirmation threaded under the original message.
+	// If pod name wasn't set from FindAgentBead (text resolution), try the cache.
+	if agentPodName == "" {
+		b.mu.Lock()
+		agentPodName = b.agentPodName[agent]
+		b.mu.Unlock()
+	}
+	agentDisplay := coopmuxAgentLink(b.coopmuxPublicURL, agentPodName, extractAgentName(agent))
 	_, _, _ = b.api.PostMessage(ev.Channel,
 		slack.MsgOptionText(
-			fmt.Sprintf(":mega: Forwarded to *%s* (tracking: `%s`)", extractAgentName(agent), beadID),
+			fmt.Sprintf(":mega: Forwarded to %s (tracking: `%s`)", agentDisplay, beadID),
 			false),
 		slack.MsgOptionTS(replyTS),
 	)
