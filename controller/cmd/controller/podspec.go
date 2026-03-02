@@ -183,6 +183,14 @@ func applyProjectDefaults(cfg *config.Config, spec *podmanager.AgentPodSpec) {
 		}
 		spec.Env[k] = v
 	}
+
+	// Inject per-project plain env vars. Project values do not override
+	// env vars that are already set (e.g., from controller config).
+	for _, ev := range entry.EnvVars {
+		if _, exists := spec.Env[ev.Name]; !exists {
+			spec.Env[ev.Name] = ev.Value
+		}
+	}
 }
 
 // applyResourceOverride sets a resource quantity in a ResourceList if the value

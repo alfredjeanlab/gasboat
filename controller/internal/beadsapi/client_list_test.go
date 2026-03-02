@@ -478,6 +478,94 @@ func TestListProjectBeads_EmptyResourceAndEnvFields(t *testing.T) {
 	if len(p.EnvOverrides) != 0 {
 		t.Errorf("expected no env overrides, got %d", len(p.EnvOverrides))
 	}
+	if len(p.EnvVars) != 0 {
+		t.Errorf("expected no env vars, got %d", len(p.EnvVars))
+	}
+}
+
+func TestListProjectBeads_ParsesEnvVars(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := listBeadsResponse{
+			Beads: []beadJSON{
+				{
+					ID:    "proj-monorepo",
+					Title: "monorepo",
+					Type:  "project",
+					Fields: json.RawMessage(`{
+						"prefix":"kd",
+						"git_url":"https://github.com/org/monorepo",
+						"env":"[{\"name\":\"JIRA_BASE_URL\",\"value\":\"https://pihealth.atlassian.net\"},{\"name\":\"JIRA_PROJECT\",\"value\":\"PIH\"}]"
+					}`),
+				},
+			},
+			Total: 1,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client()}
+	projects, err := c.ListProjectBeads(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	p, ok := projects["monorepo"]
+	if !ok {
+		t.Fatal("expected project 'monorepo' in map")
+	}
+
+	if len(p.EnvVars) != 2 {
+		t.Fatalf("expected 2 env vars, got %d", len(p.EnvVars))
+	}
+	if p.EnvVars[0].Name != "JIRA_BASE_URL" || p.EnvVars[0].Value != "https://pihealth.atlassian.net" {
+		t.Errorf("unexpected first env var: %+v", p.EnvVars[0])
+	}
+	if p.EnvVars[1].Name != "JIRA_PROJECT" || p.EnvVars[1].Value != "PIH" {
+		t.Errorf("unexpected second env var: %+v", p.EnvVars[1])
+	}
+}
+
+func TestListProjectBeads_SecretsAndEnvVarsTogether(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := listBeadsResponse{
+			Beads: []beadJSON{
+				{
+					ID:    "proj-both",
+					Title: "both",
+					Type:  "project",
+					Fields: json.RawMessage(`{
+						"prefix":"bt",
+						"secrets":"[{\"env\":\"API_TOKEN\",\"secret\":\"both-api-token\",\"key\":\"token\"}]",
+						"env":"[{\"name\":\"BASE_URL\",\"value\":\"https://example.com\"}]"
+					}`),
+				},
+			},
+			Total: 1,
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, httpClient: srv.Client()}
+	projects, err := c.ListProjectBeads(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	p := projects["both"]
+	if len(p.Secrets) != 1 {
+		t.Fatalf("expected 1 secret, got %d", len(p.Secrets))
+	}
+	if p.Secrets[0].Env != "API_TOKEN" {
+		t.Errorf("expected API_TOKEN secret, got %s", p.Secrets[0].Env)
+	}
+	if len(p.EnvVars) != 1 {
+		t.Fatalf("expected 1 env var, got %d", len(p.EnvVars))
+	}
+	if p.EnvVars[0].Name != "BASE_URL" || p.EnvVars[0].Value != "https://example.com" {
+		t.Errorf("unexpected env var: %+v", p.EnvVars[0])
+	}
 }
 
 func TestListProjectBeads_SkipsEmptyTitle(t *testing.T) {
