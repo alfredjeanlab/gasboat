@@ -426,6 +426,18 @@ func projectFromAgentIdentity(identity string) string {
 	return ""
 }
 
+// resolveAgentThread checks if the given agent is thread-bound (spawned from a
+// Slack thread). Returns the thread's channel and timestamp if so, or empty
+// strings for regular agents.
+func (b *Bot) resolveAgentThread(ctx context.Context, agent string) (channel, threadTS string) {
+	agentName := extractAgentName(agent)
+	detail, err := b.daemon.FindAgentBead(ctx, agentName)
+	if err != nil {
+		return "", ""
+	}
+	return detail.Fields["slack_thread_channel"], detail.Fields["slack_thread_ts"]
+}
+
 // stripBotMention removes all <@BOTID> occurrences from text and trims whitespace.
 func stripBotMention(text, botUserID string) string {
 	mention := fmt.Sprintf("<@%s>", botUserID)

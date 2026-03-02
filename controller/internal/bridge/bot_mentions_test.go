@@ -805,6 +805,76 @@ func TestHandleThreadSpawn_CreatesBeadAndState(t *testing.T) {
 	}
 }
 
+func TestResolveAgentThread_ThreadBound(t *testing.T) {
+	daemon := newMockDaemon()
+	// Seed a thread-bound agent bead.
+	daemon.beads["thread-agent"] = &beadsapi.BeadDetail{
+		ID:    "bd-thread-agent",
+		Title: "thread-agent",
+		Type:  "agent",
+		Fields: map[string]string{
+			"agent":                "thread-agent",
+			"slack_thread_channel": "C-thread",
+			"slack_thread_ts":      "1234.5678",
+			"spawn_source":         "slack-thread",
+		},
+	}
+
+	b := &Bot{
+		daemon: daemon,
+		logger: slog.Default(),
+	}
+
+	channel, ts := b.resolveAgentThread(context.Background(), "thread-agent")
+	if channel != "C-thread" {
+		t.Errorf("channel = %q, want C-thread", channel)
+	}
+	if ts != "1234.5678" {
+		t.Errorf("ts = %q, want 1234.5678", ts)
+	}
+}
+
+func TestResolveAgentThread_RegularAgent(t *testing.T) {
+	daemon := newMockDaemon()
+	// Seed a regular agent (no thread metadata).
+	daemon.beads["regular-agent"] = &beadsapi.BeadDetail{
+		ID:    "bd-regular-agent",
+		Title: "regular-agent",
+		Type:  "agent",
+		Fields: map[string]string{
+			"agent":   "regular-agent",
+			"project": "gasboat",
+		},
+	}
+
+	b := &Bot{
+		daemon: daemon,
+		logger: slog.Default(),
+	}
+
+	channel, ts := b.resolveAgentThread(context.Background(), "regular-agent")
+	if channel != "" {
+		t.Errorf("expected empty channel for regular agent, got %q", channel)
+	}
+	if ts != "" {
+		t.Errorf("expected empty ts for regular agent, got %q", ts)
+	}
+}
+
+func TestResolveAgentThread_NotFound(t *testing.T) {
+	daemon := newMockDaemon()
+
+	b := &Bot{
+		daemon: daemon,
+		logger: slog.Default(),
+	}
+
+	channel, ts := b.resolveAgentThread(context.Background(), "nonexistent")
+	if channel != "" || ts != "" {
+		t.Errorf("expected empty for nonexistent agent, got channel=%q ts=%q", channel, ts)
+	}
+}
+
 func TestHandleThreadSpawn_WithRouter(t *testing.T) {
 	daemon := newMockDaemon()
 

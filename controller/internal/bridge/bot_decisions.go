@@ -189,11 +189,20 @@ func (b *Bot) NotifyDecision(ctx context.Context, bead BeadEvent) error {
 	// Resolve target channel for this agent.
 	targetChannel := b.resolveChannel(agent)
 
-	// Thread under agent card or predecessor decision.
+	// Thread under agent card, slack thread, or predecessor decision.
 	var threadTS string
 	var threadSource string
 
-	if b.agentThreadingEnabled() && agent != "" {
+	// Check if this agent is thread-bound (spawned from a Slack thread).
+	if agent != "" {
+		if slackChannel, slackTS := b.resolveAgentThread(ctx, agent); slackChannel != "" && slackTS != "" {
+			targetChannel = slackChannel
+			threadTS = slackTS
+			threadSource = "slack_thread"
+		}
+	}
+
+	if threadSource == "" && b.agentThreadingEnabled() && agent != "" {
 		// Agent threading mode: thread under the agent's status card.
 		cardTS, err := b.ensureAgentCard(ctx, agent, targetChannel)
 		if err != nil {
@@ -298,10 +307,16 @@ func (b *Bot) NotifyEscalation(ctx context.Context, bead BeadEvent) error {
 		slack.MsgOptionBlocks(blocks...),
 	}
 
-	// In agent threading mode, thread escalation under the agent's card.
-	if b.agentThreadingEnabled() && agent != "" {
-		if cardTS, err := b.ensureAgentCard(ctx, agent, targetChannel); err == nil {
-			msgOpts = append(msgOpts, slack.MsgOptionTS(cardTS))
+	// Thread-bound agents: post in the originating Slack thread.
+	if agent != "" {
+		if slackChannel, slackTS := b.resolveAgentThread(ctx, agent); slackChannel != "" && slackTS != "" {
+			targetChannel = slackChannel
+			msgOpts = append(msgOpts, slack.MsgOptionTS(slackTS))
+		} else if b.agentThreadingEnabled() {
+			// Agent threading mode: thread escalation under the agent's card.
+			if cardTS, err := b.ensureAgentCard(ctx, agent, targetChannel); err == nil {
+				msgOpts = append(msgOpts, slack.MsgOptionTS(cardTS))
+			}
 		}
 	}
 
