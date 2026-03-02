@@ -48,7 +48,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.gitlabBridge.gitlab.secretName }}
-                  key: api-token
+                  key: {{ .Values.gitlabBridge.gitlab.secretKey | default "token" }}
             {{- end }}
             {{- if .Values.gitlabBridge.gitlab.webhookSecret }}
             - name: GITLAB_WEBHOOK_SECRET
@@ -58,7 +58,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.gitlabBridge.gitlab.webhookSecretName }}
-                  key: webhook-secret
+                  key: {{ .Values.gitlabBridge.gitlab.webhookSecretKey | default "webhook-secret" }}
             {{- end }}
             {{- if .Values.gitlabBridge.gitlab.groupID }}
             - name: GITLAB_GROUP_ID
