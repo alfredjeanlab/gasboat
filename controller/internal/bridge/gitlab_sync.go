@@ -53,9 +53,11 @@ func NewGitLabSync(cfg GitLabSyncConfig) *GitLabSync {
 }
 
 // RegisterHandlers registers SSE event handlers on the given stream.
-// Watches for bead updates where mr_url is set — triggers MR status check.
+// Watches for bead updates where mr_url is set — triggers MR status check
+// and MR description sync.
 func (s *GitLabSync) RegisterHandlers(stream *SSEStream) {
 	stream.On("beads.bead.updated", s.handleUpdated)
+	stream.On("beads.bead.updated", s.handleDescriptionSync)
 	s.logger.Info("GitLab sync watcher registered SSE handlers",
 		"topics", []string{"beads.bead.updated"})
 }
@@ -121,6 +123,76 @@ func (s *GitLabSync) handleUpdated(ctx context.Context, data []byte) {
 	if err := s.daemon.UpdateBeadFields(ctx, bead.ID, fields); err != nil {
 		s.logger.Error("failed to update bead fields",
 			"bead", bead.ID, "error", err)
+	}
+}
+
+// mrDescFields are the bead fields that feed into the MR description section.
+var mrDescFields = map[string]bool{
+	"jira_key":            true,
+	"jira_status":         true,
+	"mr_state":            true,
+	"mr_pipeline_status":  true,
+	"mr_pipeline_url":     true,
+	"mr_approved":         true,
+	"mr_approvers":        true,
+}
+
+// handleDescriptionSync updates the gasboat-managed section of the GitLab MR
+// description when relevant bead fields change.
+func (s *GitLabSync) handleDescriptionSync(ctx context.Context, data []byte) {
+	if s.gitlab == nil {
+		return
+	}
+
+	bead := ParseBeadEvent(data)
+	if bead == nil || bead.Type != "task" {
+		return
+	}
+
+	mrURL := bead.Fields["mr_url"]
+	if mrURL == "" {
+		return
+	}
+
+	ref := ParseMRURL(mrURL)
+	if ref == nil {
+		return
+	}
+
+	// Only sync when a relevant field changed.
+	if bead.Changes != nil {
+		relevant := false
+		for k := range bead.Changes {
+			if mrDescFields[k] {
+				relevant = true
+				break
+			}
+		}
+		if !relevant {
+			return
+		}
+	}
+
+	// Dedup: don't re-sync too frequently.
+	dedupKey := "gitlab-mrdesc:" + bead.ID
+	if s.isDuplicate(dedupKey) {
+		return
+	}
+
+	section := MRDescriptionSection{
+		BeadID:         bead.ID,
+		JIRAKey:        bead.Fields["jira_key"],
+		JIRAStatus:     bead.Fields["jira_status"],
+		PipelineStatus: bead.Fields["mr_pipeline_status"],
+		PipelineURL:    bead.Fields["mr_pipeline_url"],
+		Approved:       bead.Fields["mr_approved"],
+		Approvers:      bead.Fields["mr_approvers"],
+		MRState:        bead.Fields["mr_state"],
+	}
+
+	if err := syncMRDescription(ctx, s.gitlab, ref.ProjectPath, ref.IID, section, s.logger); err != nil {
+		s.logger.Error("failed to sync MR description",
+			"bead", bead.ID, "mr_url", mrURL, "error", err)
 	}
 }
 

@@ -241,6 +241,18 @@ func (c *GitLabClient) DownloadJobArtifacts(ctx context.Context, projectPath str
 	return nil
 }
 
+// UpdateMergeRequestDescription updates only the description field of a merge request.
+// PUT /projects/:id/merge_requests/:merge_request_iid
+func (c *GitLabClient) UpdateMergeRequestDescription(ctx context.Context, projectPath string, mrIID int, description string) error {
+	encoded := url.PathEscape(projectPath)
+	path := fmt.Sprintf("/api/v4/projects/%s/merge_requests/%d", encoded, mrIID)
+	body := map[string]string{"description": description}
+	if err := c.doJSON(ctx, http.MethodPut, path, body, nil); err != nil {
+		return fmt.Errorf("GitLab update MR description %s!%d: %w", projectPath, mrIID, err)
+	}
+	return nil
+}
+
 // MRRef holds the parsed components of a GitLab MR URL.
 type MRRef struct {
 	ProjectPath string // e.g., "PiHealth/CoreFICS/fics-helm-chart"
