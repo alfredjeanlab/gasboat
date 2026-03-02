@@ -406,9 +406,49 @@ func outputRosterSection(w io.Writer, self string) {
 	fmt.Fprintln(w)
 }
 
+// isAutoAssignEnabled checks whether auto-assignment is enabled for this agent.
+// Inheritance: agent bead overrides project bead. Default is enabled.
+// If the agent bead has auto_assign set, that value wins. Otherwise, the
+// project bead's auto_assign field is checked. If neither is set, auto-assign
+// is enabled.
+func isAutoAssignEnabled(ctx context.Context, proj string) bool {
+	// 1. Agent bead (highest precedence).
+	if agentBeadID := os.Getenv("KD_AGENT_ID"); agentBeadID != "" {
+		if agentBead, err := daemon.GetBead(ctx, agentBeadID); err == nil {
+			if v, ok := agentBead.Fields["auto_assign"]; ok {
+				return v != "false"
+			}
+		}
+	}
+
+	// 2. Project bead.
+	if proj != "" {
+		result, err := daemon.ListBeadsFiltered(ctx, beadsapi.ListBeadsQuery{
+			Types:    []string{"project"},
+			Statuses: []string{"open", "in_progress", "blocked", "deferred"},
+			Limit:    50,
+		})
+		if err == nil {
+			for _, b := range result.Beads {
+				name := strings.TrimPrefix(b.Title, "Project: ")
+				if name == proj {
+					if b.Fields["auto_assign"] == "false" {
+						return false
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// 3. Default: enabled.
+	return true
+}
+
 // outputAutoAssign checks if the agent has in_progress beads and auto-assigns
 // the highest-priority ready task if idle. Skips if BOAT_TASK_ID is set (the
-// agent was spawned with a specific pre-assigned task).
+// agent was spawned with a specific pre-assigned task) or if auto_assign is
+// disabled on the agent or project bead.
 func outputAutoAssign(w io.Writer, agentID string) {
 	if os.Getenv("BOAT_TASK_ID") != "" {
 		return
@@ -421,6 +461,11 @@ func outputAutoAssign(w io.Writer, agentID string) {
 	}
 
 	ctx := context.Background()
+
+	// Check auto_assign setting (agent bead overrides project bead).
+	if !isAutoAssignEnabled(ctx, proj) {
+		return
+	}
 
 	// Check if agent already has in_progress work.
 	resp, err := daemon.ListBeadsFiltered(ctx, beadsapi.ListBeadsQuery{

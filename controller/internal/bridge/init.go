@@ -95,6 +95,8 @@ func configs() map[string]any {
 				// Advice subscription overrides.
 				{Name: "advice_subscriptions", Type: "string[]"},
 				{Name: "advice_subscriptions_exclude", Type: "string[]"},
+				// Auto-assignment control: "true" (default) or "false".
+				{Name: "auto_assign", Type: "string"},
 			},
 		},
 		"type:mail": TypeConfig{
@@ -129,6 +131,9 @@ func configs() map[string]any {
 				{Name: "service_account", Type: "string"},
 				{Name: "secrets", Type: "json"},
 				{Name: "repos", Type: "json"},
+				// Auto-assignment control: "true" (default) or "false".
+				// Inherited by agents unless overridden on the agent bead.
+				{Name: "auto_assign", Type: "string"},
 			},
 		},
 
