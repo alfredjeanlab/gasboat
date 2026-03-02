@@ -83,14 +83,26 @@ fi
 # from the GitLab account associated with GITLAB_TOKEN.
 if [ -z "${GIT_AUTHOR_EMAIL:-}" ] && [ -n "${GITLAB_TOKEN:-}" ]; then
     GL_HOST="${GITLAB_HOST:-gitlab.com}"
+    GL_EMAIL=""
+    # Try /user/emails first (lists verified addresses).
     GL_EMAIL=$(curl -sf "https://${GL_HOST}/api/v4/user/emails" \
         -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" 2>/dev/null \
         | jq -r 'first(.[] | select(.confirmed_at != null) | .email) // empty' 2>/dev/null || true)
+    # Fallback: derive the noreply email from /user (works when email scope is unavailable).
+    if [ -z "${GL_EMAIL}" ]; then
+        GL_USER_ID=$(curl -sf "https://${GL_HOST}/api/v4/user" \
+            -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" 2>/dev/null \
+            | jq -r '.id // empty' 2>/dev/null || true)
+        if [ -n "${GL_USER_ID}" ]; then
+            GL_EMAIL="${GL_USER_ID}-noreply@${GL_HOST#https://}"
+        fi
+    fi
     if [ -n "${GL_EMAIL}" ]; then
         git config --global user.email "${GL_EMAIL}"
         echo "[entrypoint] Git committer email resolved from GitLab account: ${GL_EMAIL}"
     else
         echo "[entrypoint] WARNING: could not resolve GitLab committer email; using ${ROLE}@gasboat.local"
+        echo "[entrypoint] TIP: set GIT_AUTHOR_EMAIL env var on the project bead to fix this"
     fi
 fi
 
