@@ -23,6 +23,8 @@ import (
 
 	"strings"
 
+	slackapi "github.com/slack-go/slack"
+
 	"gasboat/controller/internal/beadsapi"
 	"gasboat/controller/internal/bridge"
 )
@@ -145,6 +147,16 @@ func main() {
 		logger.Info("Slack webhook notifier enabled", "channel", cfg.slackChannel)
 	} else {
 		logger.Warn("SLACK_BOT_TOKEN not set — running without Slack notifications")
+	}
+
+	// Register Slack thread API (read/reply endpoints for agents).
+	if bot != nil {
+		threadAPI := bridge.NewSlackThreadAPI(bot.API(), logger)
+		threadAPI.RegisterRoutes(mux)
+	} else if cfg.slackBotToken != "" {
+		// Webhook mode — create a standalone Slack client for thread API.
+		threadAPI := bridge.NewSlackThreadAPI(slackapi.New(cfg.slackBotToken), logger)
+		threadAPI.RegisterRoutes(mux)
 	}
 
 	// Start HTTP server (always — serves health endpoints + optional webhook handler).
