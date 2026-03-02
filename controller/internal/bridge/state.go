@@ -17,7 +17,8 @@ import (
 type MessageRef struct {
 	ChannelID string `json:"channel_id"`
 	Timestamp string `json:"timestamp"`
-	Agent     string `json:"agent,omitempty"` // agent identity (for decision messages)
+	Agent     string `json:"agent,omitempty"`     // agent identity (for decision messages)
+	ThreadTS  string `json:"thread_ts,omitempty"` // parent thread ts (set when message is a thread reply)
 }
 
 // DashboardRef tracks the persistent dashboard message.
