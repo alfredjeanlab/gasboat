@@ -155,6 +155,22 @@ func (m *mockDaemon) ListAgentBeads(_ context.Context) ([]beadsapi.AgentBead, er
 	return result, nil
 }
 
+func (m *mockDaemon) ResolveTicket(_ context.Context, ticketKey string) (*beadsapi.BeadDetail, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Check direct bead ID match.
+	if b, ok := m.beads[ticketKey]; ok {
+		return b, nil
+	}
+	// Check jira_key field match.
+	for _, b := range m.beads {
+		if b.Fields != nil && b.Fields["jira_key"] == ticketKey {
+			return b, nil
+		}
+	}
+	return nil, fmt.Errorf("ticket %q not found", ticketKey)
+}
+
 func (m *mockDaemon) getClosed() []closeCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()

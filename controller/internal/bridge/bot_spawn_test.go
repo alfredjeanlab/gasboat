@@ -217,6 +217,168 @@ func TestHandleSpawnCommand_InvalidAgentName_NoBeadCreated(t *testing.T) {
 	}
 }
 
+func TestHandleSpawnCommand_ResolvesJiraTicket(t *testing.T) {
+	daemon := newMockDaemon()
+	daemon.seedProject("monorepo")
+	// Seed a task bead that represents a JIRA ticket.
+	daemon.mu.Lock()
+	daemon.beads["kd-resolved-1"] = &beadsapi.BeadDetail{
+		ID:     "kd-resolved-1",
+		Title:  "Fix login bug",
+		Type:   "task",
+		Labels: []string{"jira:PE-1234", "project:monorepo"},
+		Fields: map[string]string{"jira_key": "PE-1234"},
+	}
+	daemon.mu.Unlock()
+
+	slackSrv := newFakeSlackServer(t)
+	defer slackSrv.Close()
+
+	bot := newTestBot(daemon, slackSrv)
+
+	bot.handleSpawnCommand(context.Background(), slack.SlashCommand{
+		Command:   "/spawn",
+		Text:      "my-bot PE-1234",
+		ChannelID: "C123",
+		UserID:    "U456",
+	})
+
+	agentBeads := filterAgentBeads(daemon.beads)
+	if len(agentBeads) != 1 {
+		t.Fatalf("expected 1 agent bead created, got %d", len(agentBeads))
+	}
+	for _, b := range agentBeads {
+		if b.Fields["project"] != "monorepo" {
+			t.Errorf("expected project=monorepo (inferred from ticket), got %s", b.Fields["project"])
+		}
+		if b.Description != "Assigned to task: kd-resolved-1" {
+			t.Errorf("expected description referencing resolved bead ID, got %q", b.Description)
+		}
+	}
+}
+
+func TestHandleSpawnCommand_ResolvesBeadID(t *testing.T) {
+	daemon := newMockDaemon()
+	daemon.seedProject("gasboat")
+	// Seed a task bead with a kd- ID.
+	daemon.mu.Lock()
+	daemon.beads["kd-task-99"] = &beadsapi.BeadDetail{
+		ID:     "kd-task-99",
+		Title:  "Implement feature X",
+		Type:   "task",
+		Labels: []string{"project:gasboat"},
+		Fields: map[string]string{},
+	}
+	daemon.mu.Unlock()
+
+	slackSrv := newFakeSlackServer(t)
+	defer slackSrv.Close()
+
+	bot := newTestBot(daemon, slackSrv)
+
+	bot.handleSpawnCommand(context.Background(), slack.SlashCommand{
+		Command:   "/spawn",
+		Text:      "my-bot kd-task-99",
+		ChannelID: "C123",
+		UserID:    "U456",
+	})
+
+	agentBeads := filterAgentBeads(daemon.beads)
+	if len(agentBeads) != 1 {
+		t.Fatalf("expected 1 agent bead created, got %d", len(agentBeads))
+	}
+	for _, b := range agentBeads {
+		if b.Fields["project"] != "gasboat" {
+			t.Errorf("expected project=gasboat (inferred from bead labels), got %s", b.Fields["project"])
+		}
+		if b.Description != "Assigned to task: kd-task-99" {
+			t.Errorf("expected description referencing kd-task-99, got %q", b.Description)
+		}
+	}
+}
+
+func TestHandleSpawnCommand_TicketNotFound_NoBeadCreated(t *testing.T) {
+	daemon := newMockDaemon()
+	slackSrv := newFakeSlackServer(t)
+	defer slackSrv.Close()
+
+	bot := newTestBot(daemon, slackSrv)
+
+	bot.handleSpawnCommand(context.Background(), slack.SlashCommand{
+		Command:   "/spawn",
+		Text:      "my-bot PE-9999",
+		ChannelID: "C123",
+		UserID:    "U456",
+	})
+
+	if len(daemon.beads) != 0 {
+		t.Errorf("expected no bead created when ticket not found, got %d", len(daemon.beads))
+	}
+}
+
+func TestHandleSpawnCommand_TicketWithRole(t *testing.T) {
+	daemon := newMockDaemon()
+	daemon.seedProject("monorepo")
+	daemon.mu.Lock()
+	daemon.beads["kd-resolved-2"] = &beadsapi.BeadDetail{
+		ID:     "kd-resolved-2",
+		Title:  "Deploy service",
+		Type:   "task",
+		Labels: []string{"jira:DEVOPS-42", "project:monorepo"},
+		Fields: map[string]string{"jira_key": "DEVOPS-42"},
+	}
+	daemon.mu.Unlock()
+
+	slackSrv := newFakeSlackServer(t)
+	defer slackSrv.Close()
+
+	bot := newTestBot(daemon, slackSrv)
+
+	bot.handleSpawnCommand(context.Background(), slack.SlashCommand{
+		Command:   "/spawn",
+		Text:      "deploy-bot DEVOPS-42 --role devops",
+		ChannelID: "C123",
+		UserID:    "U456",
+	})
+
+	agentBeads := filterAgentBeads(daemon.beads)
+	if len(agentBeads) != 1 {
+		t.Fatalf("expected 1 agent bead created, got %d", len(agentBeads))
+	}
+	for _, b := range agentBeads {
+		if b.Fields["role"] != "devops" {
+			t.Errorf("expected role=devops, got %s", b.Fields["role"])
+		}
+		if b.Fields["project"] != "monorepo" {
+			t.Errorf("expected project=monorepo, got %s", b.Fields["project"])
+		}
+	}
+}
+
+func TestIsTicketRef(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"jira key", "PE-1234", true},
+		{"jira multi-letter", "DEVOPS-42", true},
+		{"bead id", "kd-abc123", true},
+		{"project name", "gasboat", false},
+		{"empty", "", false},
+		{"no digits", "PE-abc", false},
+		{"just prefix", "PE-", false},
+		{"lowercase jira", "pe-123", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isTicketRef(tc.input); got != tc.want {
+				t.Errorf("isTicketRef(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestIsValidAgentName(t *testing.T) {
 	cases := []struct {
 		name  string

@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/slack-go/slack"
@@ -27,14 +28,15 @@ func (b *Bot) handleSlashCommand(ctx context.Context, cmd slack.SlashCommand) {
 }
 
 // handleSpawnCommand processes the /spawn slash command.
-// Usage: /spawn <agent> [project|"PROMPT TEXT"] [task] [--role <role>]
-// When the second argument is a quoted string, it is used as a custom prompt
-// for the agent instead of a project name.
+// Usage: /spawn <agent> [project|ticket|"PROMPT TEXT"] [task] [--role <role>]
+// When the second argument is a quoted string, it is used as a custom prompt.
+// When it looks like a ticket reference (PE-1234, kd-xxx), it is resolved to a
+// bead ID and the project is inferred from the ticket's labels or prefix.
 func (b *Bot) handleSpawnCommand(ctx context.Context, cmd slack.SlashCommand) {
 	args := splitQuotedArgs(strings.TrimSpace(cmd.Text))
 	if len(args) == 0 {
 		_, _ = b.api.PostEphemeral(cmd.ChannelID, cmd.UserID,
-			slack.MsgOptionText(":x: Usage: `/spawn <agent> [project|\"PROMPT TEXT\"] [task] [--role <role>]`", false))
+			slack.MsgOptionText(":x: Usage: `/spawn <agent> [project|ticket|\"PROMPT TEXT\"] [task] [--role <role>]`", false))
 		return
 	}
 
@@ -61,18 +63,36 @@ func (b *Bot) handleSpawnCommand(ctx context.Context, cmd slack.SlashCommand) {
 
 	project := ""
 	customPrompt := ""
+	taskID := ""
+
 	if len(positional) >= 2 {
 		arg2 := positional[1]
 		// Quoted strings are custom prompts, not project names.
 		if strings.Contains(arg2, " ") {
 			customPrompt = arg2
+		} else if isTicketRef(arg2) {
+			// Ticket reference (e.g., "PE-1234", "kd-abc123") — resolve to
+			// bead ID and infer project from the ticket.
+			bead, err := b.daemon.ResolveTicket(ctx, arg2)
+			if err != nil {
+				b.logger.Error("failed to resolve ticket", "ticket", arg2, "error", err)
+				_, _ = b.api.PostEphemeral(cmd.ChannelID, cmd.UserID,
+					slack.MsgOptionText(fmt.Sprintf(":x: Could not resolve ticket %q: %s", arg2, err.Error()), false))
+				return
+			}
+			taskID = bead.ID
+			// Infer project from the bead's project label.
+			project = projectFromLabels(bead.Labels)
+			// If no project label on the bead, try the prefix → project mapping.
+			if project == "" {
+				project = b.projectFromTicketPrefix(ctx, arg2)
+			}
 		} else {
 			project = arg2
 		}
 	}
 
-	taskID := ""
-	if len(positional) >= 3 {
+	if len(positional) >= 3 && taskID == "" {
 		taskID = positional[2]
 	}
 
@@ -163,6 +183,48 @@ func isValidAgentName(s string) bool {
 		}
 	}
 	return true
+}
+
+// ticketRefRe matches external ticket references like "PE-1234" or "DEVOPS-42".
+var ticketRefRe = regexp.MustCompile(`^[A-Za-z]+-\d+$`)
+
+// isTicketRef reports whether s looks like a ticket reference.
+// Matches JIRA-style keys (PE-1234, DEVOPS-42) and internal bead IDs (kd-xxx).
+func isTicketRef(s string) bool {
+	return strings.HasPrefix(s, "kd-") || ticketRefRe.MatchString(s)
+}
+
+// projectFromLabels extracts the project name from a bead's labels.
+// Returns "" if no project label is found.
+func projectFromLabels(labels []string) string {
+	for _, l := range labels {
+		if v, ok := strings.CutPrefix(l, "project:"); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// projectFromTicketPrefix looks up the project name for a ticket's prefix
+// (e.g., "PE" from "PE-1234") by checking registered project beads' Prefix fields.
+func (b *Bot) projectFromTicketPrefix(ctx context.Context, ticket string) string {
+	parts := strings.SplitN(ticket, "-", 2)
+	if len(parts) < 2 {
+		return ""
+	}
+	prefix := strings.ToLower(parts[0])
+
+	projects, err := b.daemon.ListProjectBeads(ctx)
+	if err != nil {
+		b.logger.Error("failed to list projects for prefix lookup", "error", err)
+		return ""
+	}
+	for name, info := range projects {
+		if strings.EqualFold(info.Prefix, prefix) {
+			return name
+		}
+	}
+	return ""
 }
 
 // handleDecisionsCommand shows pending decisions as an ephemeral message.

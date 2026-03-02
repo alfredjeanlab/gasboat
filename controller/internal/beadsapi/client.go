@@ -291,6 +291,34 @@ func (c *Client) ListAssignedTask(ctx context.Context, agentName string) (*BeadD
 	return nil, nil
 }
 
+// ResolveTicket looks up a bead by external ticket key (e.g., "PE-1234").
+// It searches for beads with the label "jira:<key>". If no match is found
+// by label, it falls back to a direct GetBead call (for kd-* bead IDs).
+// Returns the matched bead detail or an error if the ticket cannot be resolved.
+func (c *Client) ResolveTicket(ctx context.Context, ticketKey string) (*BeadDetail, error) {
+	// For kd-* IDs, try a direct lookup first.
+	if strings.HasPrefix(ticketKey, "kd-") {
+		bead, err := c.GetBead(ctx, ticketKey)
+		if err == nil && bead != nil && bead.ID != "" {
+			return bead, nil
+		}
+	}
+
+	// Search by jira label (e.g., "jira:PE-1234").
+	result, err := c.ListBeadsFiltered(ctx, ListBeadsQuery{
+		Labels: []string{"jira:" + ticketKey},
+		Limit:  1,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("resolving ticket %q: %w", ticketKey, err)
+	}
+	if len(result.Beads) > 0 {
+		return result.Beads[0], nil
+	}
+
+	return nil, fmt.Errorf("ticket %q not found", ticketKey)
+}
+
 // ListDecisionBeads queries the daemon for active decision beads (type=decision).
 func (c *Client) ListDecisionBeads(ctx context.Context) ([]*BeadDetail, error) {
 	resp, err := c.listBeads(ctx, []string{"decision"}, activeStatuses)
