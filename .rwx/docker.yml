@@ -10,6 +10,7 @@
 #   push-agent          -> ghcr.io/groblegark/gasboat/agent
 #   push-slack-bridge   -> ghcr.io/groblegark/gasboat/slack-bridge
 #   push-jira-bridge    -> ghcr.io/groblegark/gasboat/jira-bridge
+#   push-gitlab-bridge  -> ghcr.io/groblegark/gasboat/gitlab-bridge
 #   push-advice-viewer  -> ghcr.io/groblegark/gasboat/advice-viewer
 #
 # For manual push of a single image:
@@ -42,7 +43,7 @@ on:
         coop-version: latest
         kd-version: latest
       status-checks:
-        - tasks: [build-controller, build-gb, build-slack-bridge, build-jira-bridge, build-advice-viewer, download-coop, download-kd]
+        - tasks: [build-controller, build-gb, build-slack-bridge, build-jira-bridge, build-gitlab-bridge, build-advice-viewer, download-coop, download-kd]
           name: Docker
   dispatch:
     - key: gasboat-agent-rebuild
@@ -216,6 +217,29 @@ tasks:
         - key: jira-bridge-binary
           path: jira-bridge
 
+  # ── Build gitlab-bridge binary → artifact ──────────────────────────
+  - key: build-gitlab-bridge
+    use: go-deps
+    run: |
+      cd controller
+      REF_NAME="${REF_NAME#refs/tags/}"
+      REF_NAME="${REF_NAME#refs/heads/}"
+      CGO_ENABLED=0 GOOS=linux go build \
+        -ldflags="-s -w -X main.version=${REF_NAME} -X main.commit=${COMMIT_SHA}" \
+        -o ../gitlab-bridge ./cmd/gitlab-bridge/
+    env:
+      COMMIT_SHA: ${{ init.commit-sha }}
+      REF_NAME: ${{ init.ref-name }}
+    filter:
+      - controller/**/*.go
+      - controller/**/*.html
+      - controller/go.mod
+      - controller/go.sum
+    outputs:
+      artifacts:
+        - key: gitlab-bridge-binary
+          path: gitlab-bridge
+
   # ── Download coop from releases → artifact (parallel, cached) ──────
   - key: download-coop
     run: |
@@ -365,6 +389,36 @@ tasks:
       REPO="ghcr.io/groblegark/gasboat/jira-bridge"
       crane append --base ubuntu:24.04 --new_tag "${REPO}:${TAG}" --new_layer /tmp/layer.tar --platform linux/amd64
       crane mutate "${REPO}:${TAG}" --entrypoint /jira-bridge --user nobody -t "${REPO}:${TAG}"
+      crane tag "${REPO}:${TAG}" latest
+      APP_VERSION=$(grep '^appVersion:' helm/gasboat/Chart.yaml | sed 's/appVersion: *"\?\([^"]*\)"\?/\1/')
+      if [ -n "$APP_VERSION" ] && [ "$APP_VERSION" != "$TAG" ]; then
+        crane tag "${REPO}:${TAG}" "$APP_VERSION"
+      fi
+      echo "Pushed ${REPO}:${TAG}"
+    env:
+      REF_NAME: ${{ init.ref-name }}
+      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+      GITHUB_USER: ${{ secrets.GITHUB_USER }}
+
+  # ── Push gitlab-bridge (minimal static binary) ──────────────────────
+  - key: push-gitlab-bridge
+    use: [build-gitlab-bridge, install-crane]
+    if: ${{ init.ref-name != 'pr' }}
+    cache: false
+    run: |
+      set -ex
+      TAG="${REF_NAME#refs/tags/}"
+      TAG="${TAG#refs/heads/}"
+
+      mkdir -p /tmp/layer/etc/ssl/certs
+      cp ${{ tasks.build-gitlab-bridge.artifacts.gitlab-bridge-binary }} /tmp/layer/gitlab-bridge
+      chmod 755 /tmp/layer/gitlab-bridge
+      cp /etc/ssl/certs/ca-certificates.crt /tmp/layer/etc/ssl/certs/
+      tar -cf /tmp/layer.tar -C /tmp/layer .
+
+      REPO="ghcr.io/groblegark/gasboat/gitlab-bridge"
+      crane append --base ubuntu:24.04 --new_tag "${REPO}:${TAG}" --new_layer /tmp/layer.tar --platform linux/amd64
+      crane mutate "${REPO}:${TAG}" --entrypoint /gitlab-bridge --user nobody -t "${REPO}:${TAG}"
       crane tag "${REPO}:${TAG}" latest
       APP_VERSION=$(grep '^appVersion:' helm/gasboat/Chart.yaml | sed 's/appVersion: *"\?\([^"]*\)"\?/\1/')
       if [ -n "$APP_VERSION" ] && [ "$APP_VERSION" != "$TAG" ]; then
