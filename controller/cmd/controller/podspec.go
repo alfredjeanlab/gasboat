@@ -176,6 +176,14 @@ func applyProjectDefaults(cfg *config.Config, spec *podmanager.AgentPodSpec) {
 		applyResourceOverride(spec.Resources.Limits, corev1.ResourceMemory, entry.MemoryLimit)
 	}
 
+	// RTK: set env var if project has RTK enabled
+	if entry.RTKEnabled {
+		if spec.Env == nil {
+			spec.Env = make(map[string]string)
+		}
+		spec.Env["RTK_ENABLED"] = "true"
+	}
+
 	// Apply per-project env overrides (additive; project values take precedence).
 	for k, v := range entry.EnvOverrides {
 		if spec.Env == nil {

@@ -165,7 +165,6 @@ func monitorAgentExit(ctx context.Context, coopPort int) {
 			return // coop gone
 		}
 		agentState, _ := state["state"].(string)
-		errorCategory, _ := state["error_category"].(string)
 
 		if agentState == "exited" {
 			fmt.Printf("[gb agent start] agent exited, requesting coop shutdown\n")
