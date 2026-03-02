@@ -126,8 +126,24 @@ type jiraTransition struct {
 	To   *JiraNamedRef `json:"to"`
 }
 
-// SearchIssues searches JIRA issues using JQL.
+// SearchIssues searches JIRA issues using JQL (single page).
 func (c *JiraClient) SearchIssues(ctx context.Context, jql string, fields []string, maxResults int) ([]JiraIssue, error) {
+	page, err := c.SearchIssuesPage(ctx, jql, fields, maxResults, "")
+	if err != nil {
+		return nil, err
+	}
+	return page.Issues, nil
+}
+
+// JiraSearchPage holds a page of JIRA search results with cursor token.
+type JiraSearchPage struct {
+	Issues        []JiraIssue
+	NextPageToken string // empty when no more pages
+}
+
+// SearchIssuesPage fetches a single page of JIRA search results.
+// Pass an empty pageToken for the first page.
+func (c *JiraClient) SearchIssuesPage(ctx context.Context, jql string, fields []string, maxResults int, pageToken string) (*JiraSearchPage, error) {
 	q := url.Values{}
 	q.Set("jql", jql)
 	if len(fields) > 0 {
@@ -136,15 +152,21 @@ func (c *JiraClient) SearchIssues(ctx context.Context, jql string, fields []stri
 	if maxResults > 0 {
 		q.Set("maxResults", fmt.Sprintf("%d", maxResults))
 	}
+	if pageToken != "" {
+		q.Set("nextPageToken", pageToken)
+	}
 
 	var result struct {
-		Issues []JiraIssue `json:"issues"`
-		Total  int         `json:"total"`
+		Issues        []JiraIssue `json:"issues"`
+		NextPageToken string      `json:"nextPageToken"`
 	}
 	if err := c.doJSON(ctx, http.MethodGet, "/rest/api/3/search/jql?"+q.Encode(), nil, &result); err != nil {
 		return nil, fmt.Errorf("JIRA search: %w", err)
 	}
-	return result.Issues, nil
+	return &JiraSearchPage{
+		Issues:        result.Issues,
+		NextPageToken: result.NextPageToken,
+	}, nil
 }
 
 // GetIssue fetches a single JIRA issue by key.

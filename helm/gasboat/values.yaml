@@ -772,7 +772,7 @@ jiraBridge:
     # Comma-separated JIRA statuses to ingest
     statuses: "To Do,Ready for Development"
     # Comma-separated issue types to ingest
-    issueTypes: "Bug,Task,Story"
+    issueTypes: "Bug,Task,Story,Epic"
     # Polling interval (e.g., "60s", "5m")
     pollInterval: "60s"
     # BOAT_PROJECTS mapping: comma-separated entries of the form

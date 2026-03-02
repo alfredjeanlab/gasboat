@@ -75,8 +75,8 @@ func (p *JiraPoller) Run(ctx context.Context) error {
 	ticker := time.NewTicker(p.cfg.PollInterval)
 	defer ticker.Stop()
 
-	// Poll immediately on start, then at interval.
-	p.poll(ctx)
+	// Full scan on start to catch all matching issues across all pages.
+	p.fullScan(ctx)
 
 	for {
 		select {
@@ -112,6 +112,91 @@ func (p *JiraPoller) CatchUp(ctx context.Context) {
 	p.mu.Unlock()
 
 	p.cfg.Logger.Info("JIRA poller catch-up complete", "tracked", count)
+}
+
+// fullScan paginates through all JIRA results using nextPageToken cursor
+// to import issues missed by the single-page poll.
+func (p *JiraPoller) fullScan(ctx context.Context) {
+	jql := p.buildJQL()
+	fields := []string{"summary", "description", "status", "issuetype", "priority", "reporter", "labels", "parent", "created", "updated", "issuelinks", "attachment"}
+
+	totalCreated := 0
+	totalSkipped := 0
+	pageNum := 0
+	var allIssues []JiraIssue
+	pageToken := ""
+
+	for {
+		result, err := p.jira.SearchIssuesPage(ctx, jql, fields, 50, pageToken)
+		if err != nil {
+			// Retry once on rate limit.
+			if strings.Contains(err.Error(), "429") {
+				p.cfg.Logger.Warn("JIRA full scan rate limited, backing off", "page", pageNum)
+				select {
+				case <-ctx.Done():
+					break
+				case <-time.After(5 * time.Second):
+				}
+				result, err = p.jira.SearchIssuesPage(ctx, jql, fields, 50, pageToken)
+			}
+			if err != nil {
+				p.cfg.Logger.Error("JIRA full scan page failed", "page", pageNum, "error", err)
+				break
+			}
+		}
+
+		if len(result.Issues) == 0 {
+			break
+		}
+
+		for _, issue := range result.Issues {
+			p.mu.Lock()
+			_, exists := p.tracked[issue.Key]
+			p.mu.Unlock()
+
+			if exists {
+				totalSkipped++
+				continue
+			}
+
+			beadID, err := p.createBeadFromIssue(ctx, issue)
+			if err != nil {
+				p.cfg.Logger.Error("failed to create bead for JIRA issue",
+					"key", issue.Key, "error", err)
+				continue
+			}
+
+			p.mu.Lock()
+			p.tracked[issue.Key] = beadID
+			p.mu.Unlock()
+			totalCreated++
+
+			p.cfg.Logger.Info("created bead for JIRA issue",
+				"key", issue.Key, "bead_id", beadID,
+				"summary", issue.Fields.Summary)
+		}
+
+		allIssues = append(allIssues, result.Issues...)
+		pageNum++
+
+		// No more pages.
+		if result.NextPageToken == "" {
+			break
+		}
+		pageToken = result.NextPageToken
+
+		// Pace to avoid rate limiting.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+
+	p.wireDependencies(ctx, allIssues)
+
+	p.cfg.Logger.Info("JIRA full scan complete",
+		"created", totalCreated, "skipped", totalSkipped, "pages", pageNum)
 }
 
 // poll executes a single JIRA poll cycle.
@@ -248,9 +333,11 @@ func (p *JiraPoller) createBeadFromIssue(ctx context.Context, issue JiraIssue) (
 		if hasVideo {
 			fields["jira_has_video"] = "true"
 		}
-		if hasImages || hasVideo {
-			labels = append(labels, "jira-has-media")
-		}
+		// Always tag as media when attachments exist — the search/jql
+		// endpoint often omits mimeType from attachment stubs, so the
+		// image/video checks above may not fire even when screenshots
+		// are present.
+		labels = append(labels, "jira-has-media")
 	}
 
 	fieldsJSON, err := json.Marshal(fields)
