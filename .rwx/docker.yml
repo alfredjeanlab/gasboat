@@ -141,6 +141,7 @@ tasks:
       - controller/**/*.go
       - controller/go.mod
       - controller/go.sum
+      - controller/**/*.html
     outputs:
       artifacts:
         - key: gb-binary
@@ -830,7 +831,7 @@ tasks:
 
   # ── Re-tag coopmux → gasboat calver ───────────────────────────────────
   - key: retag-coopmux
-    use: [install-crane]
+    use: [code, install-crane]
     if: ${{ init.ref-name != 'pr' }}
     cache: false
     run: |
@@ -849,7 +850,7 @@ tasks:
 
   # ── Re-tag kbeads → gasboat calver ───────────────────────────────────
   - key: retag-kbeads
-    use: [install-crane]
+    use: [code, install-crane]
     if: ${{ init.ref-name != 'pr' }}
     cache: false
     run: |
