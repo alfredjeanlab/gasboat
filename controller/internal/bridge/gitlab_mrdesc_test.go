@@ -194,7 +194,7 @@ func TestSyncMRDescription_SkipsWhenUnchanged(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			mr := GitLabMR{IID: 42, Description: existingDesc}
-			json.NewEncoder(w).Encode(mr)
+			_ = json.NewEncoder(w).Encode(mr)
 			return
 		}
 		putCalled = true

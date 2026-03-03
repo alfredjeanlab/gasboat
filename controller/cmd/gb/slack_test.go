@@ -170,7 +170,7 @@ func TestSlackThread_Integration(t *testing.T) {
 			{Author: "user2", Text: "I can look into it", Timestamp: "111.224"},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(msgs)
+		_ = json.NewEncoder(w).Encode(msgs)
 	}))
 	defer server.Close()
 
@@ -214,7 +214,7 @@ func TestSlackReply_Integration(t *testing.T) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&receivedBody)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(slackReplyResult{OK: true, Timestamp: "111.225"})
+		_ = json.NewEncoder(w).Encode(slackReplyResult{OK: true, Timestamp: "111.225"})
 	}))
 	defer server.Close()
 
@@ -321,7 +321,7 @@ func TestFetchThreadMessages(t *testing.T) {
 			{Author: "alice", Text: "Hello", Timestamp: "111.222"},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(msgs)
+		_ = json.NewEncoder(w).Encode(msgs)
 	}))
 	defer server.Close()
 
@@ -392,7 +392,7 @@ func TestOutputSlackThreadContext_WithThread(t *testing.T) {
 			{Author: "user2", Text: "I agree we need help", Timestamp: "111.223"},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(msgs)
+		_ = json.NewEncoder(w).Encode(msgs)
 	}))
 	defer server.Close()
 
@@ -466,7 +466,7 @@ func TestSlackThread_JSONOutput(t *testing.T) {
 			{Author: "alice", Text: "Hello", Timestamp: "111.222"},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(msgs)
+		_ = json.NewEncoder(w).Encode(msgs)
 	}))
 	defer server.Close()
 

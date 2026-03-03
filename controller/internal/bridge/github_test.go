@@ -323,7 +323,7 @@ func TestGetCommitForDigest_WithTag(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`[
+		_, _ = w.Write([]byte(`[
 			{"id":1,"name":"sha256:aaa111","metadata":{"package_type":"container","container":{"tags":["latest","sha-abcdef0"]}}}
 		]`))
 	}))
@@ -343,7 +343,7 @@ func TestGetCommitForDigest_WithTag(t *testing.T) {
 func TestGetCommitForDigest_NoMatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`[
+		_, _ = w.Write([]byte(`[
 			{"id":1,"name":"sha256:other","metadata":{"package_type":"container","container":{"tags":["v1.0.0"]}}}
 		]`))
 	}))
@@ -363,7 +363,7 @@ func TestGetCommitForDigest_NoMatch(t *testing.T) {
 func TestGetCommitForDigest_NoSHATag(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`[
+		_, _ = w.Write([]byte(`[
 			{"id":1,"name":"sha256:abc123","metadata":{"package_type":"container","container":{"tags":["latest","v2.0.0"]}}}
 		]`))
 	}))
