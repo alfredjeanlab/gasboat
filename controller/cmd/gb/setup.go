@@ -118,6 +118,9 @@ func defaultUserSettings() map[string]any {
 			},
 			"deny": []any{},
 		},
+		"env": map[string]any{
+			"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+		},
 		"alwaysThinkingEnabled":             true,
 		"skipDangerousModePermissionPrompt": true,
 	}
