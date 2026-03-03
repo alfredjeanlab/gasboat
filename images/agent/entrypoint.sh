@@ -371,24 +371,30 @@ Rules:
 - If you receive a nudge that your claimed bead was updated, run \`kd show <id>\`
 - If \`gb ready\` shows nothing, check \`kd list --no-blockers\` for your project
 
-## Checkpoint Protocol (Stop Hook)
+## Ephemeral Agent Lifecycle
 
-When the stop hook blocks, you MUST create a decision checkpoint before stopping.
+Agents are ephemeral: start up, do the work, despawn. Do not idle or loop waiting for more work.
 
-1. **Summarize** what you accomplished and what's blocked
-2. **Create a decision** with concrete options — each option needs an \`artifact_type\`:
-   \`\`\`bash
-   gb decision create --no-wait \\
-     --prompt="Did X. Blocked on Y. Recommending option A because..." \\
-     --options='[
-       {"id":"a","short":"Continue","label":"Finish remaining work","artifact_type":"report"},
-       {"id":"b","short":"Rethink","label":"Change approach","artifact_type":"plan"}
-     ]'
-   \`\`\`
-   Artifact types: \`report\`, \`plan\`, \`checklist\`, \`diff-summary\`, \`epic\`, \`bug\`
-3. Run \`gb yield\` — blocks until human responds
-4. If yield requires an artifact, submit it:
-   \`gb decision report <id> --content '...'\`
+1. **Start** — Check for in-progress work (\`kd list --status=in_progress\`) or find new work (\`gb ready\`)
+2. **Work** — Claim a task, do it thoroughly, commit, push, close the bead
+3. **Done** — Call \`gb done\` to despawn cleanly
+
+If you are **blocked mid-task** and need human input, create a decision checkpoint:
+\`\`\`bash
+gb decision create --no-wait \\
+  --prompt="Did X. Blocked on Y. Recommending option A because..." \\
+  --options='[
+    {"id":"a","short":"Continue","label":"Finish remaining work","artifact_type":"report"},
+    {"id":"b","short":"Rethink","label":"Change approach","artifact_type":"plan"}
+  ]'
+gb yield
+\`\`\`
+
+When work is **done**, just close and stop — no checkpoint needed:
+\`\`\`bash
+kd close <bead-id>
+gb done
+\`\`\`
 CLAUDEMD
 fi
 
@@ -573,7 +579,7 @@ inject_initial_prompt() {
     if [ -n "${BOAT_PROMPT:-}" ]; then
         nudge_msg="${BOAT_PROMPT}"
     else
-        nudge_msg="Check \`gb ready\` for your workflow steps and begin working.${project_hint}${task_hint} IMPORTANT: (1) Run \`gb news\` first to see what your teammates are already working on — do not duplicate in-progress work. (2) Run \`kd claim <id>\` BEFORE starting any task — this atomically marks it in_progress so no other agent picks it up simultaneously."
+        nudge_msg="You are an ephemeral agent. Find work, do it, then \`gb done\`.${project_hint}${task_hint} Steps: (1) Run \`gb news\` to see what teammates are working on — do not duplicate. (2) Run \`gb ready\` to find available work. (3) \`kd claim <id>\` BEFORE starting — this atomically marks it in_progress. (4) When done: close the bead, commit, push, then \`gb done\` to despawn."
     fi
 
     echo "[entrypoint] Injecting initial work prompt (role: ${ROLE})"

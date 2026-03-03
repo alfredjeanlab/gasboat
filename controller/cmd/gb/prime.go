@@ -210,41 +210,34 @@ Two complementary mechanisms restore context after interruptions:
 - Injects fresh workflow context: assignment, roster, advice, auto-assign
 - Hooks auto-call this on SessionStart — run manually if context is stale
 
-## Stopping Cleanly
+## Agents Are Ephemeral
 
-To voluntarily despawn (stop being restarted after this session):
+Agents are ephemeral by default: start up, do the work, then despawn. Do NOT linger or idle-loop waiting for more work.
+
+**Lifecycle:**
+1. Start up → check for claimed in-progress work (resume it) or find new work via ` + "`gb ready`" + `
+2. Claim a task → do the work thoroughly (commit, push, close bead)
+3. Call ` + "`gb done`" + ` to despawn cleanly
 
 ` + "```bash" + `
-kd close <bead-id>     # close any claimed work first
-gb stop                # signal entrypoint not to restart this pod
-# finish your turn — the pod will not restart
+kd close <bead-id>     # close completed work
+gb done                # signal entrypoint not to restart this pod
 ` + "```" + `
 
-**Do NOT** just exit without calling ` + "`gb stop`" + ` — exiting alone triggers an automatic restart.
+**Do NOT** just exit without calling ` + "`gb done`" + ` — exiting alone triggers an automatic restart.
+If there is more work in the ready queue, you MAY claim another task before stopping.
 
 ## Stop Gate Contract
 
-The **decision gate** is the Slack operator's re-entry handle. Bypassing it silently cuts the bridge.
+The **decision gate** is the Slack operator's re-entry handle.
 
 **Rules:**
 - **NEVER** use ` + "`gb gate mark decision`" + ` to satisfy the gate manually — this is blocked for agents (requires ` + "`--force`" + `, operator-only).
-- When you have **no work and nothing to do**, create a decision and yield — don't exit silently.
+- When you are **blocked mid-task** and need human input, create a decision and yield.
+- When you have **finished all work**, just call ` + "`gb done`" + ` — no decision checkpoint needed.
 - The only legitimate ways to clear the gate are:
-  1. ` + "`gb yield`" + ` — blocks until a human resolves your decision bead (preferred)
-  2. ` + "`gb stop`" + ` — polite despawn when you have truly finished all work
-
-**Idle-with-no-work pattern:**
-` + "```bash" + `
-gb decision create --no-wait \
-  --prompt="Finished all assigned work. No open tasks. Waiting for direction." \
-  --options='[
-    {"id":"new-work","short":"Assign work","label":"Point me at a new task or project","artifact_type":"plan"},
-    {"id":"stop","short":"Despawn","label":"No more work needed — shut this agent down","artifact_type":"report"}
-  ]'
-gb yield
-# If the human chose "stop", then:
-gb stop
-` + "```" + `
+  1. ` + "`gb done`" + ` — polite despawn when you have finished your work (preferred)
+  2. ` + "`gb yield`" + ` — blocks until a human resolves your decision bead (use when genuinely blocked)
 `
 	fmt.Fprint(w, ctx)
 }
@@ -407,16 +400,15 @@ func outputRosterSection(w io.Writer, self string) {
 }
 
 // isAutoAssignEnabled checks whether auto-assignment is enabled for this agent.
-// Inheritance: agent bead overrides project bead. Default is enabled.
-// If the agent bead has auto_assign set, that value wins. Otherwise, the
-// project bead's auto_assign field is checked. If neither is set, auto-assign
-// is enabled.
+// Inheritance: agent bead overrides project bead. Default is DISABLED.
+// Agents are ephemeral and should ask for work on startup rather than being
+// auto-assigned. Set auto_assign=true on the agent or project bead to opt in.
 func isAutoAssignEnabled(ctx context.Context, proj string) bool {
 	// 1. Agent bead (highest precedence).
 	if agentBeadID := os.Getenv("KD_AGENT_ID"); agentBeadID != "" {
 		if agentBead, err := daemon.GetBead(ctx, agentBeadID); err == nil {
 			if v, ok := agentBead.Fields["auto_assign"]; ok {
-				return v != "false"
+				return v == "true"
 			}
 		}
 	}
@@ -432,8 +424,8 @@ func isAutoAssignEnabled(ctx context.Context, proj string) bool {
 			for _, b := range result.Beads {
 				name := strings.TrimPrefix(b.Title, "Project: ")
 				if name == proj {
-					if b.Fields["auto_assign"] == "false" {
-						return false
+					if b.Fields["auto_assign"] == "true" {
+						return true
 					}
 					break
 				}
@@ -441,8 +433,8 @@ func isAutoAssignEnabled(ctx context.Context, proj string) bool {
 		}
 	}
 
-	// 3. Default: enabled.
-	return true
+	// 3. Default: disabled (agents pull work, not pushed).
+	return false
 }
 
 // outputAutoAssign checks if the agent has in_progress beads and auto-assigns

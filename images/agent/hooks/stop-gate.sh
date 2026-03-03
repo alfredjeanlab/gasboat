@@ -39,54 +39,41 @@ if [ $_rc -eq 2 ]; then
     # Gate blocked — inject checkpoint instructions into the conversation via stdout.
     cat <<'CHECKPOINT'
 <system-reminder>
-STOP BLOCKED — decision gate unsatisfied. You MUST create a decision checkpoint before stopping.
+STOP BLOCKED — decision gate unsatisfied.
 
-## What Is a Decision Checkpoint?
+You are an ephemeral agent. If you have finished your work, close your bead(s) and
+call `gb done` to despawn. If you are blocked mid-task and need human input, create
+a decision checkpoint first.
 
-A checkpoint is a structured handoff: you summarize your work, propose next steps as
-options, and wait for human direction. Each option declares what artifact you will
-produce when chosen, so the human knows what to expect.
-
-## Steps
-
-### 1. Summarize your session
-Review what you accomplished, what's blocked, and what remains.
-
-### 2. Create a decision with concrete options
-Every option MUST have an `artifact_type` — this tells the human what deliverable
-you will produce if they pick that option.
+## If work is DONE (preferred path)
 
 ```bash
+kd close <bead-id>        # close completed work
+git add <files> && git commit -m "..." && git push   # push any code changes
+gb done                   # despawn cleanly
+```
+
+## If BLOCKED and need human input
+
+1. Create a decision with options (each needs an `artifact_type`):
+```bash
 gb decision create --no-wait \
-  --prompt="Completed X and Y. Blocked on Z. Recommending option A because..." \
+  --prompt="Did X. Blocked on Y. Recommending option A because..." \
   --options='[
-    {"id":"continue","short":"Continue work","label":"Finish the remaining implementation and write tests","artifact_type":"report"},
-    {"id":"rethink","short":"Change approach","label":"Switch to alternative design per discussion","artifact_type":"plan"},
-    {"id":"file-bug","short":"File a bug","label":"The blocker is a bug in dependency X — file it","artifact_type":"bug"}
+    {"id":"continue","short":"Continue work","label":"Finish the remaining implementation","artifact_type":"report"},
+    {"id":"rethink","short":"Change approach","label":"Switch to alternative design","artifact_type":"plan"}
   ]'
 ```
 
-**Artifact types**: `report` (summary of work), `plan` (implementation plan), `checklist` (verification steps), `diff-summary` (code change summary), `epic` (feature breakdown), `bug` (bug report)
-
-**Writing good prompts**: Lead with what you did, then why these options make sense.
-The prompt appears in Slack — make it useful for someone catching up.
-
-**Writing good options**: Each option should be a distinct, actionable next step.
-Use `short` for the button label (2-3 words) and `label` for the full description.
-
-### 3. Yield and wait
+2. Yield and wait:
 ```bash
 gb yield
 ```
-This blocks until the human responds. When it returns, act on their choice.
 
-### 4. Fulfill the artifact requirement
-If the chosen option has an artifact_type, `gb yield` will exit with an error
-telling you what artifact to produce. Submit it:
+3. If the chosen option requires an artifact, submit it:
 ```bash
-gb decision report <decision-id> --content '<artifact content in markdown>'
+gb decision report <decision-id> --content '<artifact content>'
 ```
-Then continue with your work.
 </system-reminder>
 CHECKPOINT
     exit 2
