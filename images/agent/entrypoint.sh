@@ -327,7 +327,27 @@ if [ ! -f "${CLAUDE_DIR}/settings.json" ]; then
         PLUGINS_JSON="{${PLUGINS_JSON%,}}"
         SETTINGS_JSON=$(echo "${SETTINGS_JSON}" | jq --argjson p "${PLUGINS_JSON}" '. + {enabledPlugins: $p}')
     fi
+    # Add Playwright MCP server if playwright-mcp is available.
+    if command -v playwright-mcp &>/dev/null; then
+        MCP_JSON='{"playwright":{"command":"playwright-mcp","args":["--headless","--no-sandbox"]}}'
+        SETTINGS_JSON=$(echo "${SETTINGS_JSON}" | jq --argjson m "${MCP_JSON}" '. + {mcpServers: $m}')
+    fi
     echo "${SETTINGS_JSON}" | jq . > "${CLAUDE_DIR}/settings.json"
+fi
+
+# ── MCP server configuration ─────────────────────────────────────────────
+# Inject Playwright MCP server into user-level settings if the binary is
+# available and the settings file doesn't already have it configured.
+# This covers the daemon-materialized path (gb setup claude) in addition
+# to the fallback path above.
+if command -v playwright-mcp &>/dev/null && [ -f "${CLAUDE_DIR}/settings.json" ]; then
+    if ! jq -e '.mcpServers.playwright' "${CLAUDE_DIR}/settings.json" >/dev/null 2>&1; then
+        MCP_JSON='{"playwright":{"command":"playwright-mcp","args":["--headless","--no-sandbox"]}}'
+        jq --argjson m "${MCP_JSON}" '.mcpServers = ((.mcpServers // {}) * $m)' \
+            "${CLAUDE_DIR}/settings.json" > "${CLAUDE_DIR}/settings.json.tmp" && \
+            mv "${CLAUDE_DIR}/settings.json.tmp" "${CLAUDE_DIR}/settings.json"
+        echo "[entrypoint] Injected Playwright MCP server into user settings"
+    fi
 fi
 
 # ── RTK context file ─────────────────────────────────────────────────────
