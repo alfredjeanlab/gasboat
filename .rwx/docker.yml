@@ -479,16 +479,17 @@ tasks:
 
       sudo apt-get -y update
       sudo apt-get -y install --no-install-recommends \
-        curl git git-lfs jq xz-utils ca-certificates screen \
+        curl git git-lfs jq xz-utils ca-certificates screen tmux \
         openssh-client sudo \
         python3 python3-pip python3-venv \
         make unzip \
         gcc g++ libc6-dev binutils \
         pkg-config libssl-dev \
         libcurl3t64-gnutls libicu74 libicu-dev \
-        postgresql-client shellcheck
+        postgresql-client shellcheck \
+        ffmpeg cmake libsdl2-dev
 
-      for pkg in git git-man git-lfs curl jq screen ca-certificates xz-utils \
+      for pkg in git git-man git-lfs curl jq screen tmux ca-certificates xz-utils \
           openssh-client sudo libapparmor1 \
           python3 python3-minimal python3.12 python3.12-minimal \
           python3-pip python3-venv python3.12-venv \
@@ -500,7 +501,8 @@ tasks:
           libcurl4t64 libcurl3t64-gnutls \
           libnghttp2-14 libbrotli1 libpsl5t64 libonig5 libexpat1 \
           libicu74 libicu-dev icu-devtools \
-          postgresql-client libpq5; do
+          postgresql-client libpq5 \
+          ffmpeg cmake libsdl2-dev; do
         dpkg -L "$pkg" 2>/dev/null | while read -r f; do
           [ -f "$f" ] || continue
           mkdir -p "$OUT$(dirname "$f")"
@@ -508,9 +510,9 @@ tasks:
         done || true
       done
 
-      for bin in /usr/bin/git /usr/bin/curl /usr/bin/jq /usr/bin/screen \
+      for bin in /usr/bin/git /usr/bin/curl /usr/bin/jq /usr/bin/screen /usr/bin/tmux \
           /usr/bin/python3 /usr/bin/ssh /usr/bin/make /usr/bin/gcc \
-          /usr/bin/sudo /usr/bin/psql; do
+          /usr/bin/sudo /usr/bin/psql /usr/bin/ffmpeg /usr/bin/cmake; do
         [ -f "$bin" ] || continue
         ldd "$bin" 2>/dev/null | grep "=> /" | awk '{print $3}' | while read -r lib; do
           [ -f "$lib" ] || continue
@@ -597,9 +599,9 @@ tasks:
       # Claude Code
       PATH="$OUT/usr/local/bin:$PATH" npm install -g --prefix $OUT/usr/local @anthropic-ai/claude-code
 
-      # Playwright + Chromium
+      # Playwright + Chromium + MCP server
       PLAYWRIGHT_VERSION=1.58.2
-      PATH="$OUT/usr/local/bin:$PATH" npm install -g --prefix $OUT/usr/local playwright@${PLAYWRIGHT_VERSION}
+      PATH="$OUT/usr/local/bin:$PATH" npm install -g --prefix $OUT/usr/local playwright@${PLAYWRIGHT_VERSION} @playwright/mcp
 
       # Playwright system deps
       sudo apt-get -y update
@@ -788,6 +790,17 @@ tasks:
       BUN_INSTALL=$OUT/usr/local/bun curl -fsSL https://bun.sh/install | bash
       ln -sf /usr/local/bun/bin/bun $OUT/usr/local/bin/bun
       ln -sf /usr/local/bun/bin/bunx $OUT/usr/local/bin/bunx
+
+      # whisper-cli (audio transcription for JIRA video attachments)
+      WHISPER_CPP_VERSION=1.8.3
+      curl -fsSL "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v${WHISPER_CPP_VERSION}.tar.gz" \
+        | tar -xz -C /tmp
+      cmake -S /tmp/whisper.cpp-${WHISPER_CPP_VERSION} -B /tmp/whisper-build \
+        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+      cmake --build /tmp/whisper-build --config Release -j$(nproc) --target whisper-cli
+      cp /tmp/whisper-build/bin/whisper-cli $OUT/usr/local/bin/whisper-cli
+      chmod +x $OUT/usr/local/bin/whisper-cli
+      rm -rf /tmp/whisper.cpp-${WHISPER_CPP_VERSION} /tmp/whisper-build
 
       # Helm + plugins (requires installer script)
       curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | sudo bash
