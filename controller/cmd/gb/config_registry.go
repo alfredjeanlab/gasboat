@@ -68,6 +68,11 @@ var configCategories = []ConfigCategory{
 		Strategy:    MergeOverride,
 		Description: "View definitions for bead listing and display",
 	},
+	{
+		Name:        "claude-instructions",
+		Strategy:    MergeOverride,
+		Description: "Agent instruction text (workflow context, lifecycle, stop gate) — consumed by gb prime",
+	},
 }
 
 // configCategoryMap provides O(1) lookup by category name.

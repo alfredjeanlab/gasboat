@@ -92,11 +92,53 @@ func resolvePrimeAgentIdentity(cmd *cobra.Command) string {
 	return ""
 }
 
-// outputWorkflowContext writes the core workflow context section.
+// outputWorkflowContext fetches workflow context from config beads (claude-instructions
+// category), falling back to KV config, then to hardcoded defaults.
+func outputWorkflowContext(w io.Writer, role string) {
+	ctx := context.Background()
+
+	// Build subscriptions for config resolution.
+	subs := []string{"global:*"}
+	if role != "" {
+		subs = append(subs, "role:"+role)
+	}
+
+	merged, count := ResolveConfigBeads(ctx, daemon, "claude-instructions", subs)
+	if count > 0 {
+		outputConfigSections(w, merged)
+		return
+	}
+
+	// Fallback: try KV store.
+	merged, source := ResolveConfigWithFallback(ctx, daemon, daemon, "claude-instructions", role, subs)
+	if source != "" {
+		outputConfigSections(w, merged)
+		return
+	}
+
+	// Final fallback: hardcoded defaults.
+	outputWorkflowContextHardcoded(w, role)
+}
+
+// outputConfigSections outputs resolved config bead sections in canonical order.
+func outputConfigSections(w io.Writer, config map[string]any) {
+	sections := []string{
+		"prime_header", "session_close", "core_rules", "commands",
+		"workflows", "decisions", "session_resumption", "lifecycle", "stop_gate",
+	}
+	for _, key := range sections {
+		if val, ok := config[key].(string); ok && val != "" {
+			fmt.Fprintln(w, val)
+		}
+	}
+}
+
+// outputWorkflowContextHardcoded writes the hardcoded workflow context as a
+// fallback when no config beads exist.
 // The role parameter controls which sections are included:
 //   - "polecat": omits Finding Work / Starting work sections, uses single-task lifecycle
 //   - all others (crew, captain, ""): full workflow context
-func outputWorkflowContext(w io.Writer, role string) {
+func outputWorkflowContextHardcoded(w io.Writer, role string) {
 	header := `# Beads Workflow Context
 
 > **Context Recovery**: Run ` + "`gb prime`" + ` after compaction, clear, or new session

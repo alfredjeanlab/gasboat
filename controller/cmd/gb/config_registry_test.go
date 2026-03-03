@@ -12,12 +12,13 @@ func TestConfigCategoryNames_ReturnsAll(t *testing.T) {
 	}
 
 	expected := map[string]bool{
-		"claude-settings": true,
-		"claude-hooks":    true,
-		"claude-mcp":      true,
-		"type":            true,
-		"context":         true,
-		"view":            true,
+		"claude-settings":     true,
+		"claude-hooks":        true,
+		"claude-mcp":          true,
+		"type":                true,
+		"context":             true,
+		"view":                true,
+		"claude-instructions": true,
 	}
 	for _, name := range names {
 		if !expected[name] {
@@ -124,6 +125,19 @@ func TestMergeLayers_InvalidJSON(t *testing.T) {
 	result := MergeLayers(MergeOverride, layers)
 	if result["model"] != "opus" {
 		t.Errorf("expected valid layer to be applied, got %v", result["model"])
+	}
+}
+
+func TestLookupCategory_ClaudeInstructions(t *testing.T) {
+	cat := LookupCategory("claude-instructions")
+	if cat == nil {
+		t.Fatal("expected claude-instructions category")
+	}
+	if cat.Strategy != MergeOverride {
+		t.Errorf("expected MergeOverride for claude-instructions, got %d", cat.Strategy)
+	}
+	if cat.Description == "" {
+		t.Error("expected non-empty description for claude-instructions")
 	}
 }
 
