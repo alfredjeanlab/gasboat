@@ -549,7 +549,47 @@ func runSetupClaude(ctx context.Context, workspace, role string) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "[setup] wrote %s\n", outPath)
+
+	// ── Agent instructions (claude-instructions) ────────────────────────
+	instructions, _ := ResolveConfigWithFallback(ctx, daemon, daemon, "claude-instructions", role, subs)
+	if instructions != nil {
+		writeInstructionFiles(workspace, instructions)
+	}
+
 	return nil
+}
+
+// writeInstructionFiles writes CLAUDE.md and stop-gate-text.md from the
+// resolved claude-instructions config. Only writes each file if the
+// corresponding key exists in the config.
+func writeInstructionFiles(workspace string, config map[string]any) {
+	if claudeMD, ok := config["claude_md"].(string); ok && claudeMD != "" {
+		path := filepath.Join(workspace, "CLAUDE.md")
+		if err := os.WriteFile(path, []byte(claudeMD), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "[setup] warning: failed to write CLAUDE.md: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "[setup] wrote %s from claude-instructions config\n", path)
+		}
+	}
+
+	if stopGate, ok := config["stop_gate_blocked"].(string); ok && stopGate != "" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[setup] warning: cannot determine home dir for stop-gate-text.md: %v\n", err)
+			return
+		}
+		claudeDir := filepath.Join(homeDir, ".claude")
+		if err := os.MkdirAll(claudeDir, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "[setup] warning: failed to create %s: %v\n", claudeDir, err)
+			return
+		}
+		path := filepath.Join(claudeDir, "stop-gate-text.md")
+		if err := os.WriteFile(path, []byte(stopGate), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "[setup] warning: failed to write stop-gate-text.md: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "[setup] wrote %s from claude-instructions config\n", path)
+		}
+	}
 }
 
 // mergeSimpleLayers merges JSON config layers with simple key override.

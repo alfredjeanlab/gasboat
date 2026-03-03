@@ -346,6 +346,58 @@ func TestWriteUserSettings_FilePermissions(t *testing.T) {
 	}
 }
 
+func TestWriteInstructionFiles_ClaudeMD(t *testing.T) {
+	workspace := t.TempDir()
+	config := map[string]any{
+		"claude_md": "# Test Agent\n\nYou are a test agent.",
+	}
+
+	writeInstructionFiles(workspace, config)
+
+	data, err := os.ReadFile(filepath.Join(workspace, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("expected CLAUDE.md: %v", err)
+	}
+	if string(data) != "# Test Agent\n\nYou are a test agent." {
+		t.Errorf("unexpected CLAUDE.md content: %s", data)
+	}
+}
+
+func TestWriteInstructionFiles_StopGate(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	config := map[string]any{
+		"stop_gate_blocked": "<system-reminder>STOP BLOCKED</system-reminder>",
+	}
+
+	writeInstructionFiles("/nonexistent", config)
+
+	data, err := os.ReadFile(filepath.Join(tmpDir, ".claude", "stop-gate-text.md"))
+	if err != nil {
+		t.Fatalf("expected stop-gate-text.md: %v", err)
+	}
+	if string(data) != "<system-reminder>STOP BLOCKED</system-reminder>" {
+		t.Errorf("unexpected stop-gate-text.md content: %s", data)
+	}
+}
+
+func TestWriteInstructionFiles_EmptyConfig(t *testing.T) {
+	workspace := t.TempDir()
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	// Neither key present — should not create any files.
+	writeInstructionFiles(workspace, map[string]any{"other_key": "value"})
+
+	if _, err := os.Stat(filepath.Join(workspace, "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Error("expected no CLAUDE.md when key is absent")
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, ".claude", "stop-gate-text.md")); !os.IsNotExist(err) {
+		t.Error("expected no stop-gate-text.md when key is absent")
+	}
+}
+
 func TestRunSetupClaudeDefaults_WritesBothFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)

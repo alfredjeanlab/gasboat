@@ -37,7 +37,12 @@ _rc=$?
 
 if [ $_rc -eq 2 ]; then
     # Gate blocked — inject checkpoint instructions into the conversation via stdout.
-    cat <<'CHECKPOINT'
+    # Prefer config-bead-materialized file; fall back to hardcoded text.
+    STOP_GATE_TEXT="/home/agent/.claude/stop-gate-text.md"
+    if [ -f "$STOP_GATE_TEXT" ]; then
+        cat "$STOP_GATE_TEXT"
+    else
+        cat <<'CHECKPOINT'
 <system-reminder>
 STOP BLOCKED — decision gate unsatisfied.
 
@@ -76,6 +81,7 @@ gb decision report <decision-id> --content '<artifact content>'
 ```
 </system-reminder>
 CHECKPOINT
+    fi
     exit 2
 fi
 
