@@ -66,6 +66,7 @@ type Bot struct {
 	agentState   map[string]string     // agent identity → last known agent_state
 	agentSeen    map[string]time.Time  // agent identity → last activity timestamp
 	agentPodName map[string]string     // agent identity → pod hostname (coopmux session ID)
+	agentImageTag map[string]string   // agent identity → deployed image tag
 }
 
 // BotConfig holds configuration for the Socket Mode bot.
@@ -125,6 +126,7 @@ func NewBot(cfg BotConfig) *Bot {
 		agentState:       make(map[string]string),
 		agentSeen:        make(map[string]time.Time),
 		agentPodName:     make(map[string]string),
+		agentImageTag:   make(map[string]string),
 		github:           gh,
 		repos:            cfg.Repos,
 		version:          cfg.Version,

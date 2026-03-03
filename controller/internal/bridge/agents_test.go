@@ -3,8 +3,12 @@ package bridge
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/slack-go/slack"
 )
 
 // mockAgentNotifier records calls to NotifyAgentCrash, NotifyAgentSpawn, NotifyAgentState, and NotifyAgentTaskUpdate.
@@ -627,5 +631,97 @@ func TestAgents_HandleUpdated_StateChange(t *testing.T) {
 	}
 	if changes[0].Fields["agent_state"] != "working" {
 		t.Errorf("expected agent_state=working, got %q", changes[0].Fields["agent_state"])
+	}
+}
+
+func TestExtractImageTag(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"full reference", "ghcr.io/org/agent:v2026.58.3", "v2026.58.3"},
+		{"latest tag", "ghcr.io/org/agent:latest", "latest"},
+		{"bare tag", "v2026.58.3", "v2026.58.3"},
+		{"empty", "", ""},
+		{"no tag", "ghcr.io/org/agent", "ghcr.io/org/agent"},
+		{"port in registry", "registry:5000/img:v1", "v1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extractImageTag(tc.input); got != tc.want {
+				t.Errorf("extractImageTag(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildAgentCardBlocks_ImageTagInContext(t *testing.T) {
+	blocks := buildAgentCardBlocks(
+		"gasboat/crew/test-bot",
+		0,        // pending
+		"working", // state
+		"",       // taskTitle
+		time.Time{}, // seen (zero)
+		"",       // coopmuxURL
+		"",       // podName
+		"v2026.58.3", // imageTag
+	)
+
+	// The context block (index 1) should contain the image tag.
+	if len(blocks) < 2 {
+		t.Fatalf("expected at least 2 blocks, got %d", len(blocks))
+	}
+
+	// Render the context block text to check for the image tag.
+	// Context blocks contain TextBlockObject elements.
+	contextBlock := blocks[1]
+	rendered := contextBlock.BlockType()
+	if rendered != "context" {
+		t.Fatalf("expected context block at index 1, got %q", rendered)
+	}
+
+	// Verify the image tag appears in the agent card context.
+	// We check all text elements in the context block.
+	found := false
+	for _, elem := range contextBlock.(*slack.ContextBlock).ContextElements.Elements {
+		if textObj, ok := elem.(*slack.TextBlockObject); ok {
+			if strings.Contains(textObj.Text, "v2026.58.3") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Error("expected image tag v2026.58.3 in context block text")
+	}
+}
+
+func TestBuildAgentCardBlocks_NoImageTag(t *testing.T) {
+	blocks := buildAgentCardBlocks(
+		"gasboat/crew/test-bot",
+		0,
+		"working",
+		"",
+		time.Time{},
+		"",
+		"",
+		"", // no imageTag
+	)
+
+	if len(blocks) < 2 {
+		t.Fatalf("expected at least 2 blocks, got %d", len(blocks))
+	}
+
+	contextBlock := blocks[1].(*slack.ContextBlock)
+	for _, elem := range contextBlock.ContextElements.Elements {
+		if textObj, ok := elem.(*slack.TextBlockObject); ok {
+			// The context should still have the bead ID and thread line, but no image tag separator after "Decisions thread below".
+			if strings.Contains(textObj.Text, "Decisions thread below ·") && !strings.Contains(textObj.Text, "Decisions thread below · _") {
+				// If there's a dot after "Decisions thread below" and it's not the seen timestamp,
+				// then something is wrong — an empty tag might have been appended.
+				t.Error("unexpected separator after 'Decisions thread below' when imageTag is empty")
+			}
+		}
 	}
 }

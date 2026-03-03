@@ -21,15 +21,16 @@ import (
 func newTestBot(daemon BeadClient, slackSrv *httptest.Server) *Bot {
 	api := slack.New("xoxb-test", slack.OptionAPIURL(slackSrv.URL+"/"))
 	return &Bot{
-		api:          api,
-		daemon:       daemon,
-		logger:       slog.Default(),
-		messages:     make(map[string]MessageRef),
-		agentCards:   make(map[string]MessageRef),
-		agentPending: make(map[string]int),
-		agentState:   make(map[string]string),
-		agentSeen:    make(map[string]time.Time),
-		agentPodName: make(map[string]string),
+		api:           api,
+		daemon:        daemon,
+		logger:        slog.Default(),
+		messages:      make(map[string]MessageRef),
+		agentCards:    make(map[string]MessageRef),
+		agentPending:  make(map[string]int),
+		agentState:    make(map[string]string),
+		agentSeen:     make(map[string]time.Time),
+		agentPodName:  make(map[string]string),
+		agentImageTag: make(map[string]string),
 	}
 }
 
