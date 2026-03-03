@@ -32,7 +32,7 @@ func initGitRepo(t *testing.T) (string, func()) {
 	}
 
 	// Create a bare remote and clone it.
-	run(tmp, "git", "init", "--bare", bare)
+	run(tmp, "git", "init", "--bare", "-b", "main", bare)
 	run(tmp, "git", "clone", bare, work)
 
 	// Initial commit so main branch exists.
