@@ -69,6 +69,27 @@ When multiple agents are running, always follow this sequence to avoid duplicati
 
 `gb ready` returns beads across all projects. Only work on tasks in your assigned project unless explicitly instructed otherwise.
 
+## Release (Golden Release Path)
+
+One canonical path. Template: `kd template apply kd-GwMFKXnPvR --var version=YYYY.DDD.N`
+
+```bash
+make release                          # bump Chart.yaml, commit, tag
+git push origin main <TAG>            # triggers CI (build + push images + push chart)
+gh release create <TAG> --generate-notes  # publish release notes
+# RWX E2E auto-dispatches on tag; failures become bug beads
+# fics-helm-chart auto-updates subchart; GitLab CI deploys
+```
+
+**Manual fallback** (if CI doesn't push yet):
+```bash
+make push-all                         # build + push all 6 images
+helm package helm/gasboat/ --version <TAG> --app-version <TAG>
+helm push gasboat-<TAG>.tgz oci://ghcr.io/groblegark/charts
+```
+
+**Deployment repo**: `~/book/fics-helm-chart/charts/gasboat/` — wrapper chart that depends on upstream OCI chart.
+
 ## Commits
 
 Use short, imperative subject lines. Scope in parentheses: `fix(bridge): handle nil bead metadata`.
