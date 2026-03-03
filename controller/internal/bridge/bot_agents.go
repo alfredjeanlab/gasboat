@@ -157,7 +157,20 @@ func (b *Bot) ensureAgentCard(ctx context.Context, agent, channelID string) (str
 
 // NotifyAgentSpawn is called when an agent bead is first created.
 // It records the initial spawning state and posts the agent card immediately.
+// On SSE replay after restart, stale created events for closed agents are
+// skipped to prevent zombie cards from reappearing.
 func (b *Bot) NotifyAgentSpawn(ctx context.Context, bead BeadEvent) {
+	// Guard: skip spawn for beads that are already closed (zombie prevention).
+	// During normal operation this is a no-op (new beads are never closed).
+	// During SSE replay after restart, this catches closed agents that slipped
+	// past the dedup pre-population (CatchUpAgents only covers active agents).
+	if bead.ID != "" {
+		if detail, err := b.daemon.GetBead(ctx, bead.ID); err == nil && detail.Status == "closed" {
+			b.logger.Debug("skipping spawn for closed agent bead", "id", bead.ID)
+			return
+		}
+	}
+
 	agent := bead.Assignee
 	// The created event often lacks Assignee — reconstruct from fields.
 	if agent == "" {

@@ -295,6 +295,10 @@ func main() {
 	// Run before SSE stream starts to pre-populate dedup map.
 	go dedup.CatchUpDecisions(ctx, daemon, notifier, logger)
 
+	// Catch-up: pre-populate dedup for active agent beads so SSE replay
+	// doesn't re-fire created events (prevents state flicker on restart).
+	dedup.CatchUpAgents(ctx, daemon, logger)
+
 	// Start the shared SSE stream (delivers events to all watchers).
 	go func() {
 		if err := sseStream.Start(ctx); err != nil && ctx.Err() == nil {

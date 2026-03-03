@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"log/slog"
 
@@ -25,6 +26,9 @@ func newTestBot(daemon BeadClient, slackSrv *httptest.Server) *Bot {
 		messages:     make(map[string]MessageRef),
 		agentCards:   make(map[string]MessageRef),
 		agentPending: make(map[string]int),
+		agentState:   make(map[string]string),
+		agentSeen:    make(map[string]time.Time),
+		agentPodName: make(map[string]string),
 	}
 }
 

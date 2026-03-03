@@ -96,6 +96,50 @@ func TestDedup_CatchUpDecisions_NilDaemon(t *testing.T) {
 	d.CatchUpDecisions(context.Background(), nil, nil, slog.Default())
 }
 
+func TestDedup_CatchUpAgents_MarksActiveAgents(t *testing.T) {
+	d := NewDedup(slog.Default())
+	daemon := newMockDaemon()
+	daemon.beads["agent-active-1"] = &beadsapi.BeadDetail{
+		ID:     "agent-active-1",
+		Type:   "agent",
+		Fields: map[string]string{"agent": "worker-1", "agent_state": "working"},
+	}
+	daemon.beads["agent-active-2"] = &beadsapi.BeadDetail{
+		ID:     "agent-active-2",
+		Type:   "agent",
+		Fields: map[string]string{"agent": "worker-2", "agent_state": "spawning"},
+	}
+
+	d.CatchUpAgents(context.Background(), daemon, slog.Default())
+
+	// Both active agents should be marked as seen for created events.
+	if !d.Seen("beads.bead.created:agent-active-1") {
+		t.Fatal("expected agent-active-1 created event to be marked")
+	}
+	if !d.Seen("beads.bead.created:agent-active-2") {
+		t.Fatal("expected agent-active-2 created event to be marked")
+	}
+}
+
+func TestDedup_CatchUpAgents_NilDaemon(t *testing.T) {
+	d := NewDedup(slog.Default())
+
+	// Should not panic with nil daemon.
+	d.CatchUpAgents(context.Background(), nil, slog.Default())
+}
+
+func TestDedup_CatchUpAgents_Empty(t *testing.T) {
+	d := NewDedup(slog.Default())
+	daemon := newMockDaemon()
+
+	d.CatchUpAgents(context.Background(), daemon, slog.Default())
+
+	// No agents to mark — a previously unseen key should still be unseen.
+	if d.Seen("beads.bead.created:nonexistent") {
+		t.Fatal("expected no keys to be pre-marked for empty daemon")
+	}
+}
+
 func TestDedup_CatchUpDecisions_PrePopulatesDedup(t *testing.T) {
 	d := NewDedup(slog.Default())
 	daemon := newMockDaemon()

@@ -98,6 +98,27 @@ func (d *Dedup) CatchUpDecisions(ctx context.Context, daemon BeadClient, notifie
 		"skipped_seen", skippedSeen)
 }
 
+// CatchUpAgents fetches active agent beads from the daemon and pre-populates
+// the dedup map so that SSE replay of stale created events is suppressed.
+// This prevents agent card flicker (state reset to "spawning") on restart.
+func (d *Dedup) CatchUpAgents(ctx context.Context, daemon BeadClient, logger *slog.Logger) {
+	if daemon == nil {
+		return
+	}
+
+	agents, err := daemon.ListAgentBeads(ctx)
+	if err != nil {
+		logger.Warn("catch-up agents: failed to list active agents", "error", err)
+		return
+	}
+
+	for _, a := range agents {
+		d.Mark("beads.bead.created:" + a.ID)
+	}
+
+	logger.Info("catch-up agents complete", "marked", len(agents))
+}
+
 // beadEventFromDetail converts a BeadDetail to a BeadEvent for notification.
 func beadEventFromDetail(d *beadsapi.BeadDetail) BeadEvent {
 	return BeadEvent{

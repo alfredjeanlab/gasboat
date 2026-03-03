@@ -162,3 +162,85 @@ func TestPruneStaleAgentCards_NoCards(t *testing.T) {
 		t.Errorf("expected 0 agent cards, got %d", len(bot.agentCards))
 	}
 }
+
+// TestNotifyAgentSpawn_SkipsClosedBead verifies that NotifyAgentSpawn does not
+// post a card for an agent bead that is already closed (zombie prevention on
+// SSE replay after restart).
+func TestNotifyAgentSpawn_SkipsClosedBead(t *testing.T) {
+	daemon := newMockDaemon()
+	// Seed a closed agent bead.
+	daemon.beads["agent-closed-1"] = &beadsapi.BeadDetail{
+		ID:       "agent-closed-1",
+		Type:     "agent",
+		Status:   "closed",
+		Title:    "dead-agent",
+		Assignee: "gasboat/crew/dead-agent",
+		Fields:   map[string]string{"agent": "dead-agent", "agent_state": "done"},
+	}
+
+	var postedMessages int
+	slackSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/chat.postMessage" {
+			postedMessages++
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "message_ts": "9999.9999"})
+	}))
+	defer slackSrv.Close()
+
+	bot := newTestBot(daemon, slackSrv)
+	bot.channel = "C123"
+
+	// Simulate SSE replay of a created event for an already-closed agent.
+	bot.NotifyAgentSpawn(context.Background(), BeadEvent{
+		ID:       "agent-closed-1",
+		Type:     "agent",
+		Title:    "dead-agent",
+		Assignee: "gasboat/crew/dead-agent",
+		Fields:   map[string]string{"agent": "dead-agent"},
+	})
+
+	// No Slack message should have been posted.
+	if postedMessages != 0 {
+		t.Errorf("expected 0 Slack messages for closed bead, got %d", postedMessages)
+	}
+
+	// No agent state should have been recorded.
+	if _, ok := bot.agentState["dead-agent"]; ok {
+		t.Error("expected no agent state recorded for closed bead")
+	}
+}
+
+// TestNotifyAgentSpawn_AllowsOpenBead verifies that NotifyAgentSpawn proceeds
+// normally for an open (active) agent bead.
+func TestNotifyAgentSpawn_AllowsOpenBead(t *testing.T) {
+	daemon := newMockDaemon()
+	// Seed an open agent bead.
+	daemon.beads["agent-open-1"] = &beadsapi.BeadDetail{
+		ID:       "agent-open-1",
+		Type:     "agent",
+		Status:   "open",
+		Title:    "live-agent",
+		Assignee: "gasboat/crew/live-agent",
+		Fields:   map[string]string{"agent": "live-agent", "agent_state": "spawning"},
+	}
+
+	slackSrv := newFakeSlackServer(t)
+	defer slackSrv.Close()
+
+	bot := newTestBot(daemon, slackSrv)
+	bot.channel = "C123"
+
+	bot.NotifyAgentSpawn(context.Background(), BeadEvent{
+		ID:       "agent-open-1",
+		Type:     "agent",
+		Title:    "live-agent",
+		Assignee: "gasboat/crew/live-agent",
+		Fields:   map[string]string{"agent": "live-agent"},
+	})
+
+	// Agent state should have been recorded.
+	if state, ok := bot.agentState["live-agent"]; !ok || state != "spawning" {
+		t.Errorf("expected agent state 'spawning', got %q (exists=%v)", state, ok)
+	}
+}
