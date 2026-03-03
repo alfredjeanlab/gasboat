@@ -145,13 +145,14 @@ func (m *mockDaemon) ListAgentBeads(_ context.Context) ([]beadsapi.AgentBead, er
 	for _, b := range m.beads {
 		if b.Type == "agent" {
 			result = append(result, beadsapi.AgentBead{
-				ID:        b.ID,
-				Title:     b.Title,
-				Project:   b.Fields["project"],
-				Mode:      "crew",
-				Role:      b.Fields["role"],
-				AgentName: b.Fields["agent"],
-				Metadata:  b.Fields,
+				ID:         b.ID,
+				Title:      b.Title,
+				Project:    b.Fields["project"],
+				Mode:       "crew",
+				Role:       b.Fields["role"],
+				AgentName:  b.Fields["agent"],
+				AgentState: b.Fields["agent_state"],
+				Metadata:   b.Fields,
 			})
 		}
 	}

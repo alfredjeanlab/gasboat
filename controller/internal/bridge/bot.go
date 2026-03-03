@@ -178,6 +178,10 @@ func (b *Bot) Run(ctx context.Context) error {
 	b.botUserID = auth.UserID
 	b.logger.Info("Slack bot authenticated", "user_id", b.botUserID, "team", auth.Team)
 
+	// Prune agent cards for agents that are no longer active (done/failed/closed).
+	// This prevents stale cards from reappearing after bot restarts.
+	b.pruneStaleAgentCards(ctx)
+
 	go b.handleEvents(ctx)
 
 	err = b.socket.RunContext(ctx)

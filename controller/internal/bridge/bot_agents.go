@@ -19,6 +19,82 @@ func (b *Bot) agentThreadingEnabled() bool {
 	return b.threadingMode == "agent"
 }
 
+// pruneStaleAgentCards removes agent cards for agents that are no longer active.
+// On bot restart, the state file may contain cards for agents that have since
+// finished (done/failed) or whose beads have been closed. This method queries the
+// daemon for currently active agents and deletes Slack messages for any cards
+// that don't correspond to an active agent.
+func (b *Bot) pruneStaleAgentCards(ctx context.Context) {
+	b.mu.Lock()
+	cardCount := len(b.agentCards)
+	b.mu.Unlock()
+
+	if cardCount == 0 {
+		return
+	}
+
+	activeAgents, err := b.daemon.ListAgentBeads(ctx)
+	if err != nil {
+		b.logger.Error("prune agent cards: failed to list active agents", "error", err)
+		return
+	}
+
+	// Build a set of active agent short names, excluding done/failed agents.
+	active := make(map[string]bool, len(activeAgents))
+	for _, a := range activeAgents {
+		if a.AgentState == "done" || a.AgentState == "failed" {
+			continue // Treat terminal-state agents as stale even if bead is still open.
+		}
+		if a.Metadata["stop_requested"] != "" {
+			continue // Agent has requested shutdown.
+		}
+		active[extractAgentName(a.AgentName)] = true
+	}
+
+	// Collect stale cards (agents not in the active set).
+	b.mu.Lock()
+	var stale []string
+	for agent := range b.agentCards {
+		if !active[extractAgentName(agent)] {
+			stale = append(stale, agent)
+		}
+	}
+	b.mu.Unlock()
+
+	if len(stale) == 0 {
+		b.logger.Info("prune agent cards: all cards are current", "total", cardCount)
+		return
+	}
+
+	b.logger.Info("prune agent cards: removing stale cards",
+		"stale", len(stale), "total", cardCount, "active", len(activeAgents))
+
+	for _, agent := range stale {
+		b.mu.Lock()
+		ref, ok := b.agentCards[agent]
+		if ok {
+			delete(b.agentCards, agent)
+			delete(b.agentPending, agent)
+			delete(b.agentState, agent)
+			delete(b.agentPodName, agent)
+		}
+		b.mu.Unlock()
+
+		if ok {
+			// Delete the Slack message.
+			if _, _, err := b.api.DeleteMessageContext(ctx, ref.ChannelID, ref.Timestamp); err != nil {
+				b.logger.Warn("prune agent cards: failed to delete Slack message",
+					"agent", agent, "error", err)
+			}
+			// Remove from persisted state.
+			if b.state != nil {
+				_ = b.state.RemoveAgentCard(agent)
+			}
+			b.logger.Info("pruned stale agent card", "agent", agent)
+		}
+	}
+}
+
 // agentTaskTitle fetches the title of the task currently claimed by agent.
 // Returns "" if none is found or on error. Tries both the full identity
 // and the short name to handle assignee format mismatches.
