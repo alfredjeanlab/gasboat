@@ -120,7 +120,7 @@ func (a *Agents) handleClosed(ctx context.Context, data []byte) {
 
 	// Update the card so it shows current state (done/failed) with the Clear button.
 	if a.notifier != nil {
-		if agentState == "" {
+		if agentState != "done" && agentState != "failed" {
 			bead.Fields["agent_state"] = "done"
 		}
 		a.notifier.NotifyAgentState(ctx, *bead)

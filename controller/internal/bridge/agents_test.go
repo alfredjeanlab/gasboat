@@ -567,6 +567,37 @@ func TestAgents_HandleUpdated_TaskReassigned(t *testing.T) {
 	}
 }
 
+// TestAgents_HandleClosed_WorkingState verifies that an agent bead closing with
+// agent_state="working" gets overridden to "done" (not left as stale "working").
+func TestAgents_HandleClosed_WorkingState(t *testing.T) {
+	notif := &mockAgentNotifier{}
+	a := NewAgents(AgentsConfig{
+		Notifier: notif,
+		Logger:   slog.Default(),
+	})
+
+	workingAgent := marshalSSEBeadPayload(BeadEvent{
+		ID:       "agent-13",
+		Type:     "agent",
+		Assignee: "gasboat/crew/busy-bot",
+		Fields: map[string]string{
+			"agent_state": "working",
+		},
+	})
+	a.handleClosed(context.Background(), workingAgent)
+
+	if len(notif.getCrashes()) != 0 {
+		t.Error("working agent closing should not trigger crash notification")
+	}
+	changes := notif.getStateChanges()
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 state change notification, got %d", len(changes))
+	}
+	if changes[0].Fields["agent_state"] != "done" {
+		t.Errorf("expected agent_state overridden to done, got %q", changes[0].Fields["agent_state"])
+	}
+}
+
 // TestAgents_HandleUpdated_StateChange verifies that non-crash state changes
 // (e.g. spawning→working) trigger NotifyAgentState, not NotifyAgentCrash.
 func TestAgents_HandleUpdated_StateChange(t *testing.T) {
