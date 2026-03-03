@@ -25,26 +25,30 @@ var gbHookPrefixes = []string{"gb hook ", "gb bus emit --hook="}
 var setupClaudeCmd = &cobra.Command{
 	Use:   "claude",
 	Short: "Materialize Claude Code settings and hooks from config beads",
-	Long: `Fetches claude-settings and claude-hooks config beads from the daemon,
-merges them by specificity (global → role), and writes settings files.
+	Long: `Fetches claude-settings, claude-mcp, and claude-hooks config beads
+from the daemon, merges them by specificity (global → role), and writes:
 
-User-level settings (permissions, model, plugins) are written to
-~/.claude/settings.json. Workspace-level hooks are written to
-{workspace}/.claude/settings.json.
+  ~/.claude/settings.json           — user-level (permissions, plugins)
+  {workspace}/.mcp.json             — project-level MCP server config
+  {workspace}/.claude/settings.json — workspace-level (hooks)
 
 Config bead keys (checked in order, later overrides earlier):
   claude-settings:global — base user-level settings for all agents
   claude-settings:<role> — role-specific settings overrides
+  claude-mcp:global      — base MCP server config for all agents
+  claude-mcp:<role>      — role-specific MCP server overrides
   claude-hooks:global    — base hooks for all agents
   claude-hooks:<role>    — role-specific hook overrides
 
-Settings merge uses shallow key override: a role-level key completely
-replaces the global value for that key. For example, if global defines
-"permissions" and role also defines "permissions", the role value wins
-entirely — the two are not deep-merged.
+Settings and MCP merge use shallow key override: a role-level key
+completely replaces the global value for that key.
 
 Hooks merge uses array concatenation: role hooks are appended to (not
 replacing) global hooks for each hook type.
+
+MCP: if no claude-mcp beads exist, no .mcp.json is written (existing
+repo .mcp.json files are unaffected). When beads exist, new servers fill
+gaps without overwriting existing entries.
 
 Flags:
   --defaults   Install hardcoded settings and hooks (no server needed)
@@ -120,6 +124,51 @@ func defaultUserSettings() map[string]any {
 		"alwaysThinkingEnabled":          true,
 		"skipDangerousModePermissionPrompt": true,
 	}
+}
+
+// writeMCPConfig writes project-level MCP config to {workspace}/.mcp.json.
+// If the file already exists (e.g. from a cloned repo), mcpServers entries
+// are merged without overwriting existing servers.
+func writeMCPConfig(workspace string, config map[string]any) error {
+	outPath := filepath.Join(workspace, ".mcp.json")
+
+	servers, _ := config["mcpServers"].(map[string]any)
+	if len(servers) == 0 {
+		fmt.Fprintf(os.Stderr, "[setup] no MCP servers to configure\n")
+		return nil
+	}
+
+	// Merge with existing .mcp.json if present.
+	existing := make(map[string]any)
+	if data, err := os.ReadFile(outPath); err == nil {
+		_ = json.Unmarshal(data, &existing)
+	}
+
+	existingServers, _ := existing["mcpServers"].(map[string]any)
+	if existingServers == nil {
+		existingServers = make(map[string]any)
+	}
+
+	// New servers fill gaps; existing entries are preserved.
+	for name, cfg := range servers {
+		if _, ok := existingServers[name]; !ok {
+			existingServers[name] = cfg
+		}
+	}
+	existing["mcpServers"] = existingServers
+
+	data, err := json.MarshalIndent(existing, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshalling MCP config: %w", err)
+	}
+	data = append(data, '\n')
+
+	if err := os.WriteFile(outPath, data, 0644); err != nil {
+		return fmt.Errorf("writing MCP config: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "[setup] wrote MCP config to %s\n", outPath)
+	return nil
 }
 
 // appendDetectedPlugins auto-detects installed LSP servers and adds them
@@ -461,6 +510,28 @@ func runSetupClaude(ctx context.Context, workspace, role string) error {
 		// Fall back to hardcoded defaults when no config beads found.
 		if err := writeUserSettings(defaultUserSettings()); err != nil {
 			fmt.Fprintf(os.Stderr, "[setup] warning: failed to write default user settings: %v\n", err)
+		}
+	}
+
+	// ── Project-level MCP config (claude-mcp:*) ─────────────────────────
+	var mcpLayers []json.RawMessage
+
+	if cfg, err := daemon.GetConfig(ctx, "claude-mcp:global"); err == nil && cfg != nil {
+		mcpLayers = append(mcpLayers, cfg.Value)
+		fmt.Fprintf(os.Stderr, "[setup] loaded claude-mcp:global\n")
+	}
+
+	if role != "" {
+		if cfg, err := daemon.GetConfig(ctx, "claude-mcp:"+role); err == nil && cfg != nil {
+			mcpLayers = append(mcpLayers, cfg.Value)
+			fmt.Fprintf(os.Stderr, "[setup] loaded claude-mcp:%s\n", role)
+		}
+	}
+
+	if len(mcpLayers) > 0 {
+		mcpConfig := mergeSimpleLayers(mcpLayers)
+		if err := writeMCPConfig(workspace, mcpConfig); err != nil {
+			fmt.Fprintf(os.Stderr, "[setup] warning: failed to write MCP config: %v\n", err)
 		}
 	}
 

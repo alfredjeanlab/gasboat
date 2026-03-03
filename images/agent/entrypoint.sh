@@ -318,25 +318,9 @@ if [ "${MATERIALIZED}" = "0" ]; then
         echo "[entrypoint] WARNING: gb setup --defaults failed"
 fi
 
-# ── MCP server configuration ─────────────────────────────────────────────
-# Inject Playwright MCP server into project-level .mcp.json if the binary
-# is available. Claude Code reads MCP servers from ~/.claude.json (user
-# scope) or {workspace}/.mcp.json (project scope) — NOT from
-# ~/.claude/settings.json. We use the project-scope file so existing
-# .mcp.json configs (e.g. Mezmo in monorepo) are preserved via merge.
-MCP_FILE="${WORKSPACE}/.mcp.json"
-if command -v playwright-mcp &>/dev/null; then
-    if [ ! -f "${MCP_FILE}" ]; then
-        echo '{"mcpServers":{}}' > "${MCP_FILE}"
-    fi
-    if ! jq -e '.mcpServers.playwright' "${MCP_FILE}" >/dev/null 2>&1; then
-        MCP_JSON='{"playwright":{"command":"playwright-mcp","args":["--headless","--no-sandbox"]}}'
-        jq --argjson m "${MCP_JSON}" '.mcpServers = ((.mcpServers // {}) * $m)' \
-            "${MCP_FILE}" > "${MCP_FILE}.tmp" && \
-            mv "${MCP_FILE}.tmp" "${MCP_FILE}"
-        echo "[entrypoint] Injected Playwright MCP server into ${MCP_FILE}"
-    fi
-fi
+# MCP server configuration is handled by gb setup claude above — it writes
+# {workspace}/.mcp.json from claude-mcp:* config beads (or auto-detects
+# playwright-mcp as a default).
 
 # ── RTK context file ─────────────────────────────────────────────────────
 # When RTK is enabled, install the RTK.md context file so Claude knows

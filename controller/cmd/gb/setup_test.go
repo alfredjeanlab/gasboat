@@ -194,6 +194,140 @@ func TestAppendDetectedPlugins(t *testing.T) {
 	}
 }
 
+func TestWriteMCPConfig_NewFile(t *testing.T) {
+	workspace := t.TempDir()
+	config := map[string]any{
+		"mcpServers": map[string]any{
+			"playwright": map[string]any{
+				"command": "playwright-mcp",
+				"args":    []any{"--headless"},
+			},
+		},
+	}
+
+	if err := writeMCPConfig(workspace, config); err != nil {
+		t.Fatalf("writeMCPConfig: %v", err)
+	}
+
+	outPath := filepath.Join(workspace, ".mcp.json")
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("reading .mcp.json: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("parsing JSON: %v", err)
+	}
+
+	servers, ok := result["mcpServers"].(map[string]any)
+	if !ok {
+		t.Fatal("expected mcpServers key")
+	}
+	if servers["playwright"] == nil {
+		t.Error("expected playwright server")
+	}
+}
+
+func TestWriteMCPConfig_PreservesExisting(t *testing.T) {
+	workspace := t.TempDir()
+
+	// Write an existing .mcp.json with a mezmo server.
+	existing := `{"mcpServers":{"mezmo":{"type":"http","url":"https://mcp.mezmo.com"}}}`
+	if err := os.WriteFile(filepath.Join(workspace, ".mcp.json"), []byte(existing), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write new config with playwright — should NOT overwrite mezmo.
+	config := map[string]any{
+		"mcpServers": map[string]any{
+			"playwright": map[string]any{
+				"command": "playwright-mcp",
+			},
+		},
+	}
+
+	if err := writeMCPConfig(workspace, config); err != nil {
+		t.Fatalf("writeMCPConfig: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(workspace, ".mcp.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+
+	servers := result["mcpServers"].(map[string]any)
+	if servers["mezmo"] == nil {
+		t.Error("expected existing mezmo server to be preserved")
+	}
+	if servers["playwright"] == nil {
+		t.Error("expected new playwright server to be added")
+	}
+}
+
+func TestWriteMCPConfig_DoesNotOverrideExistingServer(t *testing.T) {
+	workspace := t.TempDir()
+
+	// Existing .mcp.json has playwright with custom args.
+	existing := `{"mcpServers":{"playwright":{"command":"playwright-mcp","args":["--custom"]}}}`
+	if err := os.WriteFile(filepath.Join(workspace, ".mcp.json"), []byte(existing), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// New config tries to set playwright with different args.
+	config := map[string]any{
+		"mcpServers": map[string]any{
+			"playwright": map[string]any{
+				"command": "playwright-mcp",
+				"args":    []any{"--headless", "--no-sandbox"},
+			},
+		},
+	}
+
+	if err := writeMCPConfig(workspace, config); err != nil {
+		t.Fatalf("writeMCPConfig: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(workspace, ".mcp.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+
+	servers := result["mcpServers"].(map[string]any)
+	pw := servers["playwright"].(map[string]any)
+	args := pw["args"].([]any)
+	if len(args) != 1 || args[0] != "--custom" {
+		t.Errorf("existing server should be preserved, got args=%v", args)
+	}
+}
+
+func TestWriteMCPConfig_EmptyServers(t *testing.T) {
+	workspace := t.TempDir()
+	config := map[string]any{
+		"mcpServers": map[string]any{},
+	}
+
+	if err := writeMCPConfig(workspace, config); err != nil {
+		t.Fatalf("writeMCPConfig: %v", err)
+	}
+
+	// Should not create the file when there are no servers.
+	outPath := filepath.Join(workspace, ".mcp.json")
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Error("expected no .mcp.json file when servers are empty")
+	}
+}
+
 func TestWriteUserSettings_FilePermissions(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)
@@ -237,6 +371,12 @@ func TestRunSetupClaudeDefaults_WritesBothFiles(t *testing.T) {
 	}
 	if userSettings["permissions"] == nil {
 		t.Error("expected permissions in user settings")
+	}
+
+	// No .mcp.json should be created without config beads.
+	mcpPath := filepath.Join(workspace, ".mcp.json")
+	if _, err := os.Stat(mcpPath); !os.IsNotExist(err) {
+		t.Error("expected no .mcp.json in defaults mode (no config beads)")
 	}
 
 	// Workspace-level hooks should exist.
