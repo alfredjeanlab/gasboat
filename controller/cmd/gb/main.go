@@ -121,6 +121,7 @@ func init() {
 	rootCmd.AddCommand(slackCmd)
 
 	// Session Control
+	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(setupCmd)
 	rootCmd.AddCommand(workspaceCmd)
 	rootCmd.AddCommand(yieldCmd)
