@@ -272,6 +272,10 @@ if [ -d "/usr/local/cargo/bin" ]; then
     export PATH="/usr/local/cargo/bin:${PATH}"
     echo "[entrypoint] Added /usr/local/cargo/bin to PATH"
 fi
+if [ -d "/ms-playwright" ] && [ -z "${PLAYWRIGHT_BROWSERS_PATH:-}" ]; then
+    export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+    echo "[entrypoint] Set PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"
+fi
 
 # ── Claude settings ──────────────────────────────────────────────────────
 #

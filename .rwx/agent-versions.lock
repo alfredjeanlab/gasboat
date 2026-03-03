@@ -1,9 +1,9 @@
 # Agent omnibus image version pins — changing any value busts the cache
 # for ALL agent-install-* tasks. Update versions here, not in docker.yml.
 #
-# To force a full rebuild, bump: cache-epoch=2
+# To force a full rebuild, bump: cache-epoch=3
 
-cache-epoch=1
+cache-epoch=2
 
 # ── Runtimes ────────────────────────────────────────────────────────
 node-major=24
