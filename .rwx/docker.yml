@@ -504,9 +504,9 @@ tasks:
           postgresql-client libpq5 \
           ffmpeg cmake libsdl2-dev; do
         dpkg -L "$pkg" 2>/dev/null | while read -r f; do
-          [ -f "$f" ] || continue
-          mkdir -p "$OUT$(dirname "$f")"
-          cp "$f" "$OUT${f}" 2>/dev/null || true
+          [ -e "$f" ] || continue  # -e matches files, symlinks, and dirs
+          [ -d "$f" ] && { mkdir -p "$OUT$f"; continue; }  # create dirs
+          mkdir -p "$OUT$(dirname "$f")" && cp -a "$f" "$OUT${f}" 2>/dev/null || true
         done || true
       done
 
@@ -831,14 +831,17 @@ tasks:
       LAYER=/tmp/layer
       mkdir -p $LAYER
 
-      # Unpack all cached install layers in parallel
-      # Layers write to non-overlapping paths so concurrent extraction is safe.
+      # Unpack all cached install layers in parallel.
+      # NOTE: all extractions use sudo because layers share directories
+      # (e.g. /usr/lib/x86_64-linux-gnu/) — if syspackages creates a
+      # root-owned dir first, non-sudo extractions silently fail to write
+      # into it, dropping files like libnspr4.so and libnss3.so.
       echo "=== Unpacking cached layers (parallel) ==="
       sudo tar -xf ${{ tasks.agent-install-syspackages.artifacts.syspackages-tar }} -C $LAYER &
-      tar -xf ${{ tasks.agent-install-node.artifacts.node-tar }} -C $LAYER &
-      tar -xf ${{ tasks.agent-install-go.artifacts.go-tar }} -C $LAYER &
-      tar -xf ${{ tasks.agent-install-rust.artifacts.rust-tar }} -C $LAYER &
-      tar -xf ${{ tasks.agent-install-clis.artifacts.clis-tar }} -C $LAYER &
+      sudo tar -xf ${{ tasks.agent-install-node.artifacts.node-tar }} -C $LAYER &
+      sudo tar -xf ${{ tasks.agent-install-go.artifacts.go-tar }} -C $LAYER &
+      sudo tar -xf ${{ tasks.agent-install-rust.artifacts.rust-tar }} -C $LAYER &
+      sudo tar -xf ${{ tasks.agent-install-clis.artifacts.clis-tar }} -C $LAYER &
       wait
       echo "=== All layers unpacked ==="
 
@@ -896,6 +899,12 @@ tasks:
         --entrypoint /entrypoint.sh \
         --user 1000 \
         --workdir /home/agent/workspace \
+        --env PATH="/usr/local/bun/bin:/usr/local/cargo/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        --env PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+        --env RUSTUP_HOME=/usr/local/rustup \
+        --env CARGO_HOME=/usr/local/cargo \
+        --env BUN_INSTALL=/usr/local/bun \
+        --env HELM_PLUGINS=/usr/local/share/helm/plugins \
         -t "${REPO}:${TAG}"
       crane tag "${REPO}:${TAG}" latest
       APP_VERSION=$(grep '^appVersion:' helm/gasboat/Chart.yaml | sed 's/appVersion: *"\?\([^"]*\)"\?/\1/')
