@@ -304,3 +304,189 @@ func TestDumpFormat_LegacyFlatArray(t *testing.T) {
 		t.Fatalf("expected 2, got %d", len(entries))
 	}
 }
+
+// --- KV key parsing tests ---
+
+func TestParseKVKeyToLabels_Global(t *testing.T) {
+	cat, labels := parseKVKeyToLabels("claude-settings:global")
+	if cat != "claude-settings" {
+		t.Errorf("expected category=claude-settings, got %s", cat)
+	}
+	if len(labels) != 1 || labels[0] != "global" {
+		t.Errorf("expected [global], got %v", labels)
+	}
+}
+
+func TestParseKVKeyToLabels_Role(t *testing.T) {
+	cat, labels := parseKVKeyToLabels("claude-hooks:captain")
+	if cat != "claude-hooks" {
+		t.Errorf("expected category=claude-hooks, got %s", cat)
+	}
+	if len(labels) != 1 || labels[0] != "role:captain" {
+		t.Errorf("expected [role:captain], got %v", labels)
+	}
+}
+
+func TestParseKVKeyToLabels_NoColon(t *testing.T) {
+	cat, labels := parseKVKeyToLabels("orphan")
+	if cat != "orphan" {
+		t.Errorf("expected category=orphan, got %s", cat)
+	}
+	if len(labels) != 1 || labels[0] != "global" {
+		t.Errorf("expected [global], got %v", labels)
+	}
+}
+
+// --- Mock for migration ---
+
+type mockMigrator struct {
+	configs map[string][]beadsapi.ConfigEntry
+	beads   []*beadsapi.BeadDetail
+	created []beadsapi.CreateBeadRequest
+	err     error
+}
+
+func (m *mockMigrator) ListConfigs(_ context.Context, namespace string) ([]beadsapi.ConfigEntry, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.configs[namespace], nil
+}
+
+func (m *mockMigrator) ListBeadsFiltered(_ context.Context, q beadsapi.ListBeadsQuery) (*beadsapi.ListBeadsResult, error) {
+	return &beadsapi.ListBeadsResult{Beads: m.beads, Total: len(m.beads)}, nil
+}
+
+func (m *mockMigrator) CreateBead(_ context.Context, req beadsapi.CreateBeadRequest) (string, error) {
+	if m.err != nil {
+		return "", m.err
+	}
+	m.created = append(m.created, req)
+	return fmt.Sprintf("kd-migrate-%d", len(m.created)), nil
+}
+
+// --- Migration tests ---
+
+func TestPlanMigration_BasicEntries(t *testing.T) {
+	client := &mockMigrator{
+		configs: map[string][]beadsapi.ConfigEntry{
+			"claude-settings": {
+				{Key: "claude-settings:global", Value: json.RawMessage(`{"model":"opus"}`)},
+				{Key: "claude-settings:captain", Value: json.RawMessage(`{"model":"sonnet"}`)},
+			},
+		},
+		beads: []*beadsapi.BeadDetail{},
+	}
+
+	actions, err := planMigration(context.Background(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(actions) != 2 {
+		t.Fatalf("expected 2 actions, got %d", len(actions))
+	}
+
+	// Should be sorted: global before role:captain.
+	if actions[0].Category != "claude-settings" || actions[0].Labels[0] != "global" {
+		t.Errorf("expected first action to be claude-settings [global], got %s %v", actions[0].Category, actions[0].Labels)
+	}
+	if actions[1].Labels[0] != "role:captain" {
+		t.Errorf("expected second action labels [role:captain], got %v", actions[1].Labels)
+	}
+	if actions[0].Skipped || actions[1].Skipped {
+		t.Error("expected no actions to be skipped")
+	}
+}
+
+func TestPlanMigration_SkipsExisting(t *testing.T) {
+	client := &mockMigrator{
+		configs: map[string][]beadsapi.ConfigEntry{
+			"claude-settings": {
+				{Key: "claude-settings:global", Value: json.RawMessage(`{"model":"opus"}`)},
+			},
+		},
+		beads: []*beadsapi.BeadDetail{
+			{Title: "claude-settings", Labels: []string{"global"}, Description: `{"model":"opus"}`},
+		},
+	}
+
+	actions, err := planMigration(context.Background(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(actions))
+	}
+	if !actions[0].Skipped {
+		t.Error("expected action to be skipped (existing bead)")
+	}
+}
+
+func TestPlanMigration_Empty(t *testing.T) {
+	client := &mockMigrator{
+		configs: map[string][]beadsapi.ConfigEntry{},
+		beads:   []*beadsapi.BeadDetail{},
+	}
+
+	actions, err := planMigration(context.Background(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) != 0 {
+		t.Errorf("expected 0 actions, got %d", len(actions))
+	}
+}
+
+func TestExecuteMigration_CreatesBeads(t *testing.T) {
+	client := &mockMigrator{created: nil}
+	actions := []migrateAction{
+		{Category: "claude-settings", Labels: []string{"global"}, Value: `{"model":"opus"}`},
+		{Category: "claude-hooks", Labels: []string{"role:captain"}, Value: `{"hooks":{}}`},
+	}
+
+	created, skipped, errors := executeMigration(context.Background(), client, actions)
+	if created != 2 || skipped != 0 || errors != 0 {
+		t.Errorf("expected 2/0/0, got %d/%d/%d", created, skipped, errors)
+	}
+
+	if len(client.created) != 2 {
+		t.Fatalf("expected 2 create calls, got %d", len(client.created))
+	}
+	if client.created[0].Title != "claude-settings" {
+		t.Errorf("wrong title: %s", client.created[0].Title)
+	}
+	if client.created[0].Type != "config" {
+		t.Errorf("wrong type: %s", client.created[0].Type)
+	}
+	if client.created[0].Description != `{"model":"opus"}` {
+		t.Errorf("wrong description: %s", client.created[0].Description)
+	}
+}
+
+func TestExecuteMigration_SkipsExisting(t *testing.T) {
+	client := &mockMigrator{created: nil}
+	actions := []migrateAction{
+		{Category: "claude-settings", Labels: []string{"global"}, Value: `{}`, Skipped: true},
+		{Category: "claude-hooks", Labels: []string{"global"}, Value: `{}`},
+	}
+
+	created, skipped, errors := executeMigration(context.Background(), client, actions)
+	if created != 1 || skipped != 1 || errors != 0 {
+		t.Errorf("expected 1/1/0, got %d/%d/%d", created, skipped, errors)
+	}
+}
+
+func TestExecuteMigration_ContinuesOnError(t *testing.T) {
+	client := &mockMigrator{err: fmt.Errorf("fail")}
+	actions := []migrateAction{
+		{Category: "a", Labels: []string{"global"}, Value: `{}`},
+		{Category: "b", Labels: []string{"global"}, Value: `{}`},
+	}
+
+	created, skipped, errors := executeMigration(context.Background(), client, actions)
+	if created != 0 || skipped != 0 || errors != 2 {
+		t.Errorf("expected 0/0/2, got %d/%d/%d", created, skipped, errors)
+	}
+}

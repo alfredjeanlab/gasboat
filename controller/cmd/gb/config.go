@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+
 	"gasboat/controller/internal/beadsapi"
 	"os"
 	"sort"
@@ -234,7 +236,174 @@ Example:
 	},
 }
 
+// --- Migrate logic ---
+
+// configMigrator is the interface for creating config beads during migration.
+type configMigrator interface {
+	ListConfigs(ctx context.Context, namespace string) ([]beadsapi.ConfigEntry, error)
+	ListBeadsFiltered(ctx context.Context, q beadsapi.ListBeadsQuery) (*beadsapi.ListBeadsResult, error)
+	CreateBead(ctx context.Context, req beadsapi.CreateBeadRequest) (string, error)
+}
+
+// migrateAction describes one KV config entry to be migrated.
+type migrateAction struct {
+	Category string   // e.g. "claude-settings"
+	Labels   []string // e.g. ["global"] or ["role:captain"]
+	Value    string   // JSON string (stored in bead Description)
+	Skipped  bool     // true if a matching bead already exists
+}
+
+// parseKVKeyToLabels converts a KV config key like "claude-settings:global"
+// or "claude-settings:captain" into (category, labels).
+func parseKVKeyToLabels(key string) (category string, labels []string) {
+	idx := strings.Index(key, ":")
+	if idx < 0 {
+		return key, []string{"global"}
+	}
+	category = key[:idx]
+	suffix := key[idx+1:]
+
+	if suffix == "global" {
+		return category, []string{"global"}
+	}
+	// Treat the suffix as a role name.
+	return category, []string{"role:" + suffix}
+}
+
+// planMigration scans all KV config entries and checks for existing
+// config beads to produce a list of migration actions.
+func planMigration(ctx context.Context, client configMigrator) ([]migrateAction, error) {
+	// Fetch all existing config beads to check for duplicates.
+	existing, err := client.ListBeadsFiltered(ctx, beadsapi.ListBeadsQuery{
+		Types:    []string{"config"},
+		Statuses: []string{"open"},
+		Limit:    500,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing existing config beads: %w", err)
+	}
+
+	// Build set of existing config beads keyed by "title|label1,label2".
+	existingSet := make(map[string]bool)
+	for _, b := range existing.Beads {
+		sort.Strings(b.Labels)
+		key := b.Title + "|" + strings.Join(b.Labels, ",")
+		existingSet[key] = true
+	}
+
+	var actions []migrateAction
+	for _, ns := range ConfigCategoryNames() {
+		entries, err := client.ListConfigs(ctx, ns)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[migrate] warning: failed to list %s: %v\n", ns, err)
+			continue
+		}
+
+		for _, entry := range entries {
+			category, labels := parseKVKeyToLabels(entry.Key)
+			sortedLabels := make([]string, len(labels))
+			copy(sortedLabels, labels)
+			sort.Strings(sortedLabels)
+
+			dedupKey := category + "|" + strings.Join(sortedLabels, ",")
+
+			actions = append(actions, migrateAction{
+				Category: category,
+				Labels:   labels,
+				Value:    string(entry.Value),
+				Skipped:  existingSet[dedupKey],
+			})
+		}
+	}
+
+	sort.Slice(actions, func(i, j int) bool {
+		if actions[i].Category != actions[j].Category {
+			return actions[i].Category < actions[j].Category
+		}
+		return strings.Join(actions[i].Labels, ",") < strings.Join(actions[j].Labels, ",")
+	})
+
+	return actions, nil
+}
+
+// executeMigration creates config beads for non-skipped actions.
+func executeMigration(ctx context.Context, client configMigrator, actions []migrateAction) (created, skipped, errors int) {
+	for _, a := range actions {
+		if a.Skipped {
+			skipped++
+			continue
+		}
+		_, err := client.CreateBead(ctx, beadsapi.CreateBeadRequest{
+			Title:       a.Category,
+			Type:        "config",
+			Kind:        "config",
+			Description: a.Value,
+			Labels:      a.Labels,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[migrate] error creating %s %v: %v\n", a.Category, a.Labels, err)
+			errors++
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "[migrate] created config bead: %s %v\n", a.Category, a.Labels)
+		created++
+	}
+	return created, skipped, errors
+}
+
+var configMigrateCmd = &cobra.Command{
+	Use:   "migrate",
+	Short: "Migrate KV config entries to label-based config beads",
+	Long: `Converts existing KV config entries (namespace:key pattern) into
+proper beads with type="config", using labels for scoping.
+
+By default runs in dry-run mode showing what would be migrated.
+Use --execute to perform the actual migration.
+
+The migration is idempotent: existing config beads with matching
+title and labels are skipped.
+
+Example:
+  gb config migrate             # dry-run: show what would happen
+  gb config migrate --execute   # actually create the config beads`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+
+		actions, err := planMigration(ctx, daemon)
+		if err != nil {
+			return err
+		}
+
+		if len(actions) == 0 {
+			fmt.Fprintf(os.Stderr, "[migrate] no KV config entries found to migrate\n")
+			return nil
+		}
+
+		execute, _ := cmd.Flags().GetBool("execute")
+
+		if !execute {
+			// Dry-run: just print the plan.
+			fmt.Fprintf(os.Stderr, "[migrate] dry-run — %d entries found:\n", len(actions))
+			for _, a := range actions {
+				status := "would create"
+				if a.Skipped {
+					status = "skip (exists)"
+				}
+				fmt.Fprintf(os.Stderr, "  %s: %s %v\n", status, a.Category, a.Labels)
+			}
+			fmt.Fprintf(os.Stderr, "\nRun with --execute to perform the migration.\n")
+			return nil
+		}
+
+		created, skipped, errors := executeMigration(ctx, daemon, actions)
+		fmt.Fprintf(os.Stderr, "[migrate] done: %d created, %d skipped, %d errors\n", created, skipped, errors)
+		return nil
+	},
+}
+
 func init() {
+	configMigrateCmd.Flags().Bool("execute", false, "actually perform the migration (default is dry-run)")
 	configCmd.AddCommand(configDumpCmd)
 	configCmd.AddCommand(configLoadCmd)
+	configCmd.AddCommand(configMigrateCmd)
 }
