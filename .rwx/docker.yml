@@ -904,16 +904,24 @@ tasks:
     if: ${{ init.ref-name != 'pr' }}
     cache: false
     run: |
-      set -ex
+      set -euo pipefail
       TAG="${REF_NAME#refs/tags/}"
       TAG="${TAG#refs/heads/}"
 
-      crane cp ghcr.io/groblegark/coop:coopmux ghcr.io/groblegark/coop:${TAG}
+      echo "Copying coop:coopmux → coop:${TAG}"
+      crane cp ghcr.io/groblegark/coop:coopmux "ghcr.io/groblegark/coop:${TAG}"
+
+      # Verify the tag was actually created
+      crane digest "ghcr.io/groblegark/coop:${TAG}" > /dev/null
+      echo "Verified coop:${TAG} exists"
+
       APP_VERSION=$(grep '^appVersion:' helm/gasboat/Chart.yaml | sed 's/appVersion: *"\?\([^"]*\)"\?/\1/')
       if [ -n "$APP_VERSION" ] && [ "$APP_VERSION" != "$TAG" ]; then
-        crane tag ghcr.io/groblegark/coop:${TAG} "$APP_VERSION"
+        crane tag "ghcr.io/groblegark/coop:${TAG}" "$APP_VERSION"
+        crane digest "ghcr.io/groblegark/coop:${APP_VERSION}" > /dev/null
+        echo "Verified coop:${APP_VERSION} exists"
       fi
-      echo "Re-tagged coop:latest → coop:${TAG}"
+      echo "Re-tagged coop:coopmux → coop:${TAG}"
     env:
       REF_NAME: ${{ init.ref-name }}
 
@@ -923,14 +931,22 @@ tasks:
     if: ${{ init.ref-name != 'pr' }}
     cache: false
     run: |
-      set -ex
+      set -euo pipefail
       TAG="${REF_NAME#refs/tags/}"
       TAG="${TAG#refs/heads/}"
 
-      crane cp ghcr.io/groblegark/kbeads:latest ghcr.io/groblegark/kbeads:${TAG}
+      echo "Copying kbeads:latest → kbeads:${TAG}"
+      crane cp ghcr.io/groblegark/kbeads:latest "ghcr.io/groblegark/kbeads:${TAG}"
+
+      # Verify the tag was actually created
+      crane digest "ghcr.io/groblegark/kbeads:${TAG}" > /dev/null
+      echo "Verified kbeads:${TAG} exists"
+
       APP_VERSION=$(grep '^appVersion:' helm/gasboat/Chart.yaml | sed 's/appVersion: *"\?\([^"]*\)"\?/\1/')
       if [ -n "$APP_VERSION" ] && [ "$APP_VERSION" != "$TAG" ]; then
-        crane tag ghcr.io/groblegark/kbeads:${TAG} "$APP_VERSION"
+        crane tag "ghcr.io/groblegark/kbeads:${TAG}" "$APP_VERSION"
+        crane digest "ghcr.io/groblegark/kbeads:${APP_VERSION}" > /dev/null
+        echo "Verified kbeads:${APP_VERSION} exists"
       fi
       echo "Re-tagged kbeads:latest → kbeads:${TAG}"
     env:
