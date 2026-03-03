@@ -38,6 +38,7 @@ e2e: build-gb
 
 image:
 	docker build \
+		--platform linux/amd64 \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg COMMIT=$(COMMIT) \
 		-t $(REGISTRY)/controller:$(VERSION) \
@@ -53,6 +54,7 @@ image-agent:
 
 image-bridge:
 	docker build \
+		--platform linux/amd64 \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg COMMIT=$(COMMIT) \
 		-t $(REGISTRY)/slack-bridge:$(VERSION) \
@@ -61,6 +63,7 @@ image-bridge:
 
 image-jira-bridge:
 	docker build \
+		--platform linux/amd64 \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg COMMIT=$(COMMIT) \
 		-t $(REGISTRY)/jira-bridge:$(VERSION) \
@@ -69,6 +72,7 @@ image-jira-bridge:
 
 image-gitlab-bridge:
 	docker build \
+		--platform linux/amd64 \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg COMMIT=$(COMMIT) \
 		-t $(REGISTRY)/gitlab-bridge:$(VERSION) \
@@ -77,6 +81,7 @@ image-gitlab-bridge:
 
 image-advice-viewer:
 	docker build \
+		--platform linux/amd64 \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg COMMIT=$(COMMIT) \
 		-t $(REGISTRY)/advice-viewer:$(VERSION) \
