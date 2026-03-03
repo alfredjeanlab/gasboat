@@ -37,8 +37,8 @@ const (
 	// Default resource values.
 	DefaultCPURequest    = "2"
 	DefaultCPULimit      = "4"
-	DefaultMemoryRequest = "1Gi"
-	DefaultMemoryLimit   = "8Gi"
+	DefaultMemoryRequest = "16Gi"
+	DefaultMemoryLimit   = "16Gi"
 
 	// Volume names.
 	VolumeWorkspace   = "workspace"
