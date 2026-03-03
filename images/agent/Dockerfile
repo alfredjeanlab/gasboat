@@ -251,7 +251,7 @@ RUN curl -fsSL "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v${WHI
     rm -rf /tmp/whisper.cpp-${WHISPER_CPP_VERSION} /tmp/whisper-build
 
 # ── Playwright + Chromium (headless browser automation) ──────────
-ARG PLAYWRIGHT_VERSION=1.50.1
+ARG PLAYWRIGHT_VERSION=1.58.2
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN npm install -g playwright@${PLAYWRIGHT_VERSION} && \
     npx playwright install --with-deps chromium && \
