@@ -97,6 +97,10 @@ func configs() map[string]any {
 				{Name: "advice_subscriptions_exclude", Type: "string[]"},
 				// Auto-assignment control: "true" or "false" (default).
 				{Name: "auto_assign", Type: "boolean"},
+				// Thread-spawn metadata (written by handleThreadSpawn).
+				{Name: "slack_thread_channel", Type: "string"},
+				{Name: "slack_thread_ts", Type: "string"},
+				{Name: "spawn_source", Type: "string"},
 			},
 		},
 		"type:mail": TypeConfig{
