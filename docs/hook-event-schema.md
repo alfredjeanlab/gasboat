@@ -33,6 +33,13 @@ activity ("doots").
 | `SessionEnd` | Agent session ended | Session terminates |
 | `PreCompact` | Context compaction | Before compaction |
 
+### Agent teams (requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`)
+
+| Event | Purpose | Fires when |
+|-------|---------|------------|
+| `TeammateIdle` | Teammate finished work, awaiting direction | Teammate becomes idle |
+| `TaskCompleted` | Task marked done in shared task list | Task status → completed |
+
 ### Not captured
 
 | Event | Reason |
@@ -43,8 +50,6 @@ activity ("doots").
 | `PostToolUseFailure` | Captured via `PostToolUse` with error field |
 | `ConfigChange` | Infrastructure noise |
 | `WorktreeCreate/Remove` | Low frequency, not useful for doots |
-| `TeammateIdle` | Not applicable to single-agent pods |
-| `TaskCompleted` | Not applicable to single-agent pods |
 
 ## Payload Schema
 
@@ -210,6 +215,47 @@ Same fields as SubagentStart.
 |-------|------|-------------|
 | `trigger` | string | `manual` or `auto` |
 
+### TeammateIdle
+
+```json
+{
+  "agent": "worker-1",
+  "session_id": "abc-123",
+  "event": "TeammateIdle",
+  "ts": "2026-03-02T07:40:00.000Z",
+  "teammate_id": "teammate-xyz",
+  "teammate_type": "general-purpose"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `teammate_id` | string | ID of the teammate that became idle |
+| `teammate_type` | string | Teammate agent type (e.g., `general-purpose`, `Explore`) |
+
+Can be used as a quality gate: exit code 2 sends feedback and keeps
+the teammate working instead of idling.
+
+### TaskCompleted
+
+```json
+{
+  "agent": "worker-1",
+  "session_id": "abc-123",
+  "event": "TaskCompleted",
+  "ts": "2026-03-02T07:42:00.000Z",
+  "task_id": "task-001",
+  "task_subject": "Implement auth middleware"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `task_id` | string | ID of the completed task |
+| `task_subject` | string | Brief description of the task |
+
+Can be used to enforce review before marking tasks done.
+
 ## Publishing Mechanism
 
 The hook relay script reads JSON from stdin (Claude Code hook input),
@@ -236,7 +282,9 @@ extracts the relevant fields, and publishes to NATS using one of:
     "SubagentStop": [{"type": "command", "command": "/usr/local/bin/hook-relay"}],
     "SessionStart": [{"type": "command", "command": "/usr/local/bin/hook-relay"}],
     "SessionEnd": [{"type": "command", "command": "/usr/local/bin/hook-relay"}],
-    "PreCompact": [{"type": "command", "command": "/usr/local/bin/hook-relay"}]
+    "PreCompact": [{"type": "command", "command": "/usr/local/bin/hook-relay"}],
+    "TeammateIdle": [{"type": "command", "command": "/usr/local/bin/hook-relay"}],
+    "TaskCompleted": [{"type": "command", "command": "/usr/local/bin/hook-relay"}]
   }
 }
 ```

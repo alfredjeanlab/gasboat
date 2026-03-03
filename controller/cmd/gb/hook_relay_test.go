@@ -229,6 +229,58 @@ func TestBuildRelayEvent_SessionEnd(t *testing.T) {
 	}
 }
 
+func TestBuildRelayEvent_TeammateIdle(t *testing.T) {
+	input := map[string]any{
+		"hook_event_name": "TeammateIdle",
+		"session_id":      "sess-team",
+		"teammate_id":     "teammate-xyz",
+		"teammate_type":   "general-purpose",
+	}
+
+	evt, subject, err := buildRelayEvent(input, "worker-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if evt.Event != "TeammateIdle" {
+		t.Errorf("expected event TeammateIdle, got %s", evt.Event)
+	}
+	if evt.TeammateID != "teammate-xyz" {
+		t.Errorf("expected teammate_id teammate-xyz, got %s", evt.TeammateID)
+	}
+	if evt.TeammateType != "general-purpose" {
+		t.Errorf("expected teammate_type general-purpose, got %s", evt.TeammateType)
+	}
+	if subject != "hooks.worker-1.TeammateIdle" {
+		t.Errorf("expected subject hooks.worker-1.TeammateIdle, got %s", subject)
+	}
+}
+
+func TestBuildRelayEvent_TaskCompleted(t *testing.T) {
+	input := map[string]any{
+		"hook_event_name": "TaskCompleted",
+		"session_id":      "sess-task",
+		"task_id":         "task-001",
+		"task_subject":    "Implement auth middleware",
+	}
+
+	evt, subject, err := buildRelayEvent(input, "worker-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if evt.Event != "TaskCompleted" {
+		t.Errorf("expected event TaskCompleted, got %s", evt.Event)
+	}
+	if evt.TaskID != "task-001" {
+		t.Errorf("expected task_id task-001, got %s", evt.TaskID)
+	}
+	if evt.TaskSubject != "Implement auth middleware" {
+		t.Errorf("expected task_subject 'Implement auth middleware', got %s", evt.TaskSubject)
+	}
+	if subject != "hooks.worker-1.TaskCompleted" {
+		t.Errorf("expected subject hooks.worker-1.TaskCompleted, got %s", subject)
+	}
+}
+
 func TestRelayEventJSON_OmitsEmptyFields(t *testing.T) {
 	evt := hookRelayEvent{
 		Agent:     "worker-1",
@@ -248,7 +300,7 @@ func TestRelayEventJSON_OmitsEmptyFields(t *testing.T) {
 	}
 
 	// These fields should be omitted for a Stop event.
-	for _, key := range []string{"tool_name", "tool_input", "tool_response", "source", "reason", "subagent_id", "subagent_type", "trigger", "cwd"} {
+	for _, key := range []string{"tool_name", "tool_input", "tool_response", "source", "reason", "subagent_id", "subagent_type", "trigger", "cwd", "teammate_id", "teammate_type", "task_id", "task_subject"} {
 		if _, ok := m[key]; ok {
 			t.Errorf("expected field %q to be omitted, but it was present", key)
 		}

@@ -196,6 +196,14 @@ func defaultHookSettings() map[string]any {
 			"SessionEnd": []any{
 				hookEntry("gb hook relay 2>/dev/null || true"),
 			},
+			// TeammateIdle: relay teammate idle events (agent teams).
+			"TeammateIdle": []any{
+				hookEntry("gb hook relay 2>/dev/null || true"),
+			},
+			// TaskCompleted: relay task completion events (agent teams).
+			"TaskCompleted": []any{
+				hookEntry("gb hook relay 2>/dev/null || true"),
+			},
 		},
 	}
 }

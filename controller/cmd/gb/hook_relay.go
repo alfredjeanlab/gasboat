@@ -41,7 +41,8 @@ Subject format: hooks.<agent>.<event>
 Example: hooks.worker-1.PreToolUse
 
 Events published: PreToolUse, PostToolUse, Stop, SubagentStart,
-SubagentStop, SessionStart, SessionEnd, PreCompact.
+SubagentStop, SessionStart, SessionEnd, PreCompact, TeammateIdle,
+TaskCompleted.
 
 Publishing strategy (in order of preference):
   1. HTTP POST to kbeads daemon (BEADS_HTTP_ADDR/v1/hooks/publish)
@@ -78,6 +79,14 @@ type hookRelayEvent struct {
 
 	// Compact events
 	Trigger string `json:"trigger,omitempty"`
+
+	// Teammate events (agent teams)
+	TeammateID   string `json:"teammate_id,omitempty"`
+	TeammateType string `json:"teammate_type,omitempty"`
+
+	// Task events (agent teams)
+	TaskID      string `json:"task_id,omitempty"`
+	TaskSubject string `json:"task_subject,omitempty"`
 }
 
 // errSkipEvent signals that the event should be silently skipped.
@@ -174,6 +183,12 @@ func buildRelayEvent(input map[string]any, agentName string) (*hookRelayEvent, s
 		evt.Trigger, _ = input["trigger"].(string)
 	case "Stop":
 		// No additional fields.
+	case "TeammateIdle":
+		evt.TeammateID, _ = input["teammate_id"].(string)
+		evt.TeammateType, _ = input["teammate_type"].(string)
+	case "TaskCompleted":
+		evt.TaskID, _ = input["task_id"].(string)
+		evt.TaskSubject, _ = input["task_subject"].(string)
 	default:
 		return nil, "", errSkipEvent
 	}
