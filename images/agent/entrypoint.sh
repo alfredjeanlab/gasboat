@@ -701,6 +701,28 @@ refresh_credentials() {
 }
 
 # ── Monitor agent exit and shut down coop ──────────────────────────────
+monitor_agent_idle() {
+    [ -z "${KD_AGENT_ID:-}" ] && return 0
+    command -v kd &>/dev/null || return 0
+    local prev_state=""
+    sleep 15
+    while true; do
+        sleep 10
+        state=$(curl -sf http://localhost:8080/api/v1/agent 2>/dev/null) || break
+        agent_state=$(echo "${state}" | jq -r '.state // empty' 2>/dev/null)
+        if [ "${agent_state}" != "${prev_state}" ] && [ -n "${agent_state}" ]; then
+            case "${agent_state}" in
+                idle|working)
+                    kd update "${KD_AGENT_ID}" -f agent_state="${agent_state}" 2>/dev/null || true
+                    ;;
+            esac
+            prev_state="${agent_state}"
+        fi
+        # Stop polling once the agent exits.
+        [ "${agent_state}" = "exited" ] && break
+    done
+}
+
 monitor_agent_exit() {
     sleep 10
     while true; do
