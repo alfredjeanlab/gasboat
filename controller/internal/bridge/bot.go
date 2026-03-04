@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -297,6 +298,13 @@ func (b *Bot) handleChatForward(ctx context.Context, ev *slackevents.MessageEven
 		return // Not a mapped agent channel
 	}
 
+	// Skip messages that contain a bot mention — these are handled by
+	// handleAppMention via the separate app_mention event. Processing them
+	// here would create duplicate tracking beads.
+	if strings.Contains(ev.Text, fmt.Sprintf("<@%s>", b.botUserID)) {
+		return
+	}
+
 	// Resolve sender display name.
 	username := ev.User
 	if user, err := b.api.GetUserInfo(ev.User); err == nil {
@@ -313,12 +321,13 @@ func (b *Bot) handleChatForward(ctx context.Context, ev *slackevents.MessageEven
 	description := fmt.Sprintf("Message from %s in Slack:\n\n%s\n\n---\n%s", username, ev.Text, slackTag)
 
 	// Create tracking bead assigned to the agent.
+	agentName := extractAgentName(agent)
 	beadID, err := b.daemon.CreateBead(ctx, beadsapi.CreateBeadRequest{
 		Title:       title,
 		Type:        "task",
 		Kind:        "issue",
 		Description: description,
-		Assignee:    extractAgentName(agent),
+		Assignee:    agentName,
 		Labels:      []string{"slack-chat"},
 		Priority:    2,
 	})
@@ -340,10 +349,18 @@ func (b *Bot) handleChatForward(ctx context.Context, ev *slackevents.MessageEven
 		})
 	}
 
+	// Nudge the agent so it knows about the new message.
+	message := fmt.Sprintf("Slack message (bead %s): %s", beadID, truncateText(ev.Text, 200))
+	client := &http.Client{Timeout: 10 * time.Second}
+	if err := NudgeAgent(ctx, b.daemon, client, b.logger, agentName, message); err != nil {
+		b.logger.Error("failed to nudge agent for chat forward",
+			"agent", agentName, "bead", beadID, "error", err)
+	}
+
 	// Post confirmation in thread.
 	_, _, _ = b.api.PostMessage(ev.Channel,
 		slack.MsgOptionText(
-			fmt.Sprintf(":speech_balloon: Forwarded to *%s* (tracking: _%s_)", extractAgentName(agent), title),
+			fmt.Sprintf(":speech_balloon: Forwarded to *%s* (tracking: _%s_)", agentName, title),
 			false),
 		slack.MsgOptionTS(ev.TimeStamp),
 	)
