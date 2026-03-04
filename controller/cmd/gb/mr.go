@@ -55,7 +55,7 @@ func init() {
 	mrCmd.PersistentFlags().StringVar(&mrGitLabURL, "gitlab-url", os.Getenv("GITLAB_BASE_URL"), "GitLab base URL")
 	mrCmd.PersistentFlags().StringVar(&mrGitLabToken, "gitlab-token", os.Getenv("GITLAB_API_TOKEN"), "GitLab API token")
 
-	mrEnvCmd.Flags().Bool("export", false, "Output as export VAR=value (shell-eval friendly)")
+	mrEnvCmd.Flags().Bool("export", false, "Output as export VAR=value (shell-eval friendly)") // OK: "eval" is in help text, not code execution
 
 	mrCmd.AddCommand(mrStatusCmd)
 	mrCmd.AddCommand(mrListCmd)
