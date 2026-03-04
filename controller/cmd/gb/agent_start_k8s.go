@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -210,8 +211,10 @@ func runCoopOnce(ctx context.Context, cfg k8sConfig, coopStateDir, resumeLog str
 	sessionCtx, sessionCancel := context.WithCancel(ctx)
 	defer sessionCancel()
 
+	coopWorkdir := resolveCoopWorkdir(cfg)
+
 	coopCmd := exec.CommandContext(sessionCtx, "coop", coopArgs...)
-	coopCmd.Dir = cfg.workspace
+	coopCmd.Dir = coopWorkdir
 	coopCmd.Stdout = os.Stdout
 	coopCmd.Stderr = os.Stderr
 	coopCmd.Env = append(os.Environ(),
@@ -248,6 +251,27 @@ func runCoopOnce(ctx context.Context, cfg k8sConfig, coopStateDir, resumeLog str
 		}
 	}
 	return exitCode, nil
+}
+
+// resolveCoopWorkdir determines the working directory for coop/Claude Code.
+// If the primary project repo was cloned by init-clone (at /home/agent/bot/{project}/work),
+// use that as the cwd so agents start inside the actual codebase. Falls back to
+// the scaffold workspace if no project repo exists.
+func resolveCoopWorkdir(cfg k8sConfig) string {
+	if cfg.project != "" {
+		// init-clone puts the primary repo at /home/agent/bot/{project}/work.
+		repoDir := filepath.Join("/home/agent/bot", cfg.project, "work")
+		if info, err := os.Stat(filepath.Join(repoDir, ".git")); err == nil && info.IsDir() {
+			fmt.Printf("[gb agent start] using project repo as cwd: %s\n", repoDir)
+			// Set KD_WORKSPACE so hooks and commands can find the repo.
+			os.Setenv("KD_WORKSPACE", repoDir)
+			os.Setenv("WORKSPACE", repoDir)
+			return repoDir
+		}
+	}
+
+	fmt.Printf("[gb agent start] no project repo found, using scaffold workspace: %s\n", cfg.workspace)
+	return cfg.workspace
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────
