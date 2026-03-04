@@ -47,6 +47,10 @@ type ProjectInfo struct {
 	MemoryRequest string // Kubernetes quantity string, e.g. "512Mi"
 	MemoryLimit   string // Kubernetes quantity string, e.g. "2Gi"
 
+	// SlackChannel is the Slack channel ID associated with this project.
+	// Used to infer the default project when /spawn is invoked from a channel.
+	SlackChannel string
+
 	// EnvOverrides holds extra env vars parsed from the env_json bead field.
 	// Keys absent or empty in the JSON are silently skipped.
 	EnvOverrides map[string]string
@@ -83,7 +87,7 @@ func (c *Client) ListProjectBeads(ctx context.Context) (map[string]ProjectInfo, 
 			CPULimit:       fields["cpu_limit"],
 			MemoryRequest:  fields["memory_request"],
 			MemoryLimit:    fields["memory_limit"],
-
+			SlackChannel:   fields["slack_channel"],
 		}
 		// Parse per-project secrets from JSON field.
 		if raw := fields["secrets"]; raw != "" {
