@@ -44,11 +44,11 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           if [ -z "$GITLAB_TRIGGER_TOKEN" ]; then
-            echo "GITLAB_TRIGGER_TOKEN not set — skipping deploy trigger"
-            echo "To enable, create a pipeline trigger in fics-helm-chart:"
-            echo "  Settings > CI/CD > Pipeline triggers"
+            echo "::error::GITLAB_TRIGGER_TOKEN secret is not set. Deploy was NOT triggered."
+            echo "To fix, create a pipeline trigger in fics-helm-chart:"
+            echo "  GitLab > Settings > CI/CD > Pipeline triggers"
             echo "Then add the token as a GitHub secret named GITLAB_TRIGGER_TOKEN"
-            exit 0
+            exit 1
           fi
 
           echo "Triggering fics-helm-chart deploy for gasboat ${VERSION}"
@@ -56,6 +56,5 @@ jobs:
             "https://gitlab.com/api/v4/projects/61489265/trigger/pipeline" \
             -F "token=${GITLAB_TRIGGER_TOKEN}" \
             -F "ref=main" \
-            -F "variables[GASBOAT_DEPLOY]=1" \
-            && echo "Deploy pipeline triggered" \
-            || echo "Warning: failed to trigger deploy pipeline"
+            -F "variables[GASBOAT_DEPLOY]=1"
+          echo "Deploy pipeline triggered for ${VERSION}"
