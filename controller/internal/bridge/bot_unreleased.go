@@ -33,6 +33,7 @@ func (b *Bot) handleUnreleasedCommand(ctx context.Context, cmd slack.SlashComman
 		Repos:         b.repos,
 		ControllerURL: b.controllerURL,
 		Version:       b.version,
+		Images:        b.imageConfigs,
 	})
 
 	// Build Block Kit response from the shared data.
@@ -85,6 +86,64 @@ func (b *Bot) handleUnreleasedCommand(ctx context.Context, cmd slack.SlashComman
 				slack.NewSectionBlock(
 					slack.NewTextBlockObject("mrkdwn", strings.Join(lines, "\n"), false, false),
 					nil, nil))
+		}
+	}
+
+	// Images section — shows unreleased build context changes per image.
+	if len(data.Images) > 0 {
+		blocks = append(blocks, slack.NewDividerBlock())
+		blocks = append(blocks,
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn", ":whale: *Image Build Changes*", false, false),
+				nil, nil))
+
+		for _, img := range data.Images {
+			if img.Error != "" {
+				text := fmt.Sprintf(":warning: *%s* `%s` — error: %s", img.Name, img.DeployedTag, img.Error)
+				blocks = append(blocks,
+					slack.NewSectionBlock(
+						slack.NewTextBlockObject("mrkdwn", text, false, false),
+						nil, nil))
+				continue
+			}
+
+			if img.ImageAheadBy == 0 {
+				text := fmt.Sprintf(":white_check_mark: *%s* `%s` — image up to date", img.Name, img.DeployedTag)
+				blocks = append(blocks,
+					slack.NewSectionBlock(
+						slack.NewTextBlockObject("mrkdwn", text, false, false),
+						nil, nil))
+				continue
+			}
+
+			header := fmt.Sprintf(":hammer_and_wrench: *%s* `%s` — *%d* file", img.Name, img.DeployedTag, img.ImageAheadBy)
+			if img.ImageAheadBy != 1 {
+				header += "s"
+			}
+			header += " changed (rebuild needed)"
+			blocks = append(blocks,
+				slack.NewSectionBlock(
+					slack.NewTextBlockObject("mrkdwn", header, false, false),
+					nil, nil))
+
+			// List changed files.
+			var fileLines []string
+			limit := len(img.Files)
+			if limit > 10 {
+				limit = 10
+			}
+			for _, f := range img.Files[:limit] {
+				fileLines = append(fileLines, fmt.Sprintf("  `%s`", f))
+			}
+			if len(img.Files) > limit {
+				fileLines = append(fileLines, fmt.Sprintf("  _...and %d more_", len(img.Files)-limit))
+			}
+			if len(fileLines) > 0 {
+				blocks = append(blocks,
+					slack.NewSectionBlock(
+						slack.NewTextBlockObject("mrkdwn", strings.Join(fileLines, "\n"), false, false),
+						nil, nil))
+			}
 		}
 	}
 

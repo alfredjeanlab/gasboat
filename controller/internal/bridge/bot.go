@@ -55,6 +55,7 @@ type Bot struct {
 	repos         []RepoRef
 	version       string
 	controllerURL string
+	imageConfigs  []ImageTrackConfig
 
 	// Coopmux terminal link support.
 	coopmuxPublicURL string // e.g., "https://gasboat.app.e2e.dev.fics.ai/mux"
@@ -87,6 +88,7 @@ type BotConfig struct {
 	Repos         []RepoRef
 	Version       string
 	ControllerURL string
+	ImageConfigs  []ImageTrackConfig
 
 	// CoopmuxPublicURL is the public base URL for the coopmux terminal dashboard
 	// (e.g., "https://gasboat.app.e2e.dev.fics.ai/mux"). When set, agent names
@@ -132,6 +134,7 @@ func NewBot(cfg BotConfig) *Bot {
 		repos:            cfg.Repos,
 		version:          cfg.Version,
 		controllerURL:    cfg.ControllerURL,
+		imageConfigs:     cfg.ImageConfigs,
 	}
 
 	// Hydrate hot caches from persisted state.

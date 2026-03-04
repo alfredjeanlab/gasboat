@@ -63,6 +63,13 @@ type ghCompare struct {
 			} `json:"author"`
 		} `json:"commit"`
 	} `json:"commits"`
+	Files []ghCompareFile `json:"files"`
+}
+
+// ghCompareFile is a file entry from the GitHub compare API response.
+type ghCompareFile struct {
+	Filename string `json:"filename"`
+	Status   string `json:"status"` // "added", "removed", "modified", "renamed"
 }
 
 // NewGitHubClient creates a new GitHub REST API client.
@@ -173,6 +180,80 @@ func (c *GitHubClient) GetUnreleased(ctx context.Context, repo RepoRef, branch s
 		})
 	}
 	return result
+}
+
+// ImageTrackConfig describes a container image to track for unreleased changes.
+type ImageTrackConfig struct {
+	Name  string   // human-readable name, e.g., "agent"
+	Repo  RepoRef  // GitHub repo that builds this image
+	Tag   string   // deployed tag (calver or commit SHA)
+	Paths []string // path prefixes to filter (e.g., "images/agent/")
+}
+
+// ImageUnreleased holds the result of checking unreleased image changes.
+type ImageUnreleased struct {
+	Name         string
+	DeployedTag  string
+	AheadBy      int // total commits in range
+	ImageAheadBy int // commits touching image paths
+	Files        []string
+	Commits      []GitCommit
+	Error        error
+}
+
+// GetImageUnreleased compares a deployed image tag to a branch and returns
+// only the changes that touch the image's build context paths.
+func (c *GitHubClient) GetImageUnreleased(ctx context.Context, cfg ImageTrackConfig, branch string) *ImageUnreleased {
+	result := &ImageUnreleased{
+		Name:        cfg.Name,
+		DeployedTag: cfg.Tag,
+	}
+
+	if cfg.Tag == "" {
+		result.Error = fmt.Errorf("no deployed tag for image %s", cfg.Name)
+		return result
+	}
+
+	cmp, err := c.CompareTagToHead(ctx, cfg.Repo, cfg.Tag, branch)
+	if err != nil {
+		result.Error = fmt.Errorf("compare %s...%s: %w", cfg.Tag, branch, err)
+		return result
+	}
+	result.AheadBy = cmp.AheadBy
+
+	// Filter files by path prefixes.
+	for _, f := range cmp.Files {
+		if matchesPathPrefixes(f.Filename, cfg.Paths) {
+			result.Files = append(result.Files, f.Filename)
+		}
+	}
+	result.ImageAheadBy = len(result.Files)
+
+	// Include commits (capped at 10) — these are all commits in the range,
+	// not filtered by path. The files list shows what actually changed.
+	limit := len(cmp.Commits)
+	if limit > 10 {
+		limit = 10
+	}
+	for _, c := range cmp.Commits[len(cmp.Commits)-limit:] {
+		result.Commits = append(result.Commits, GitCommit{
+			SHA:     c.SHA,
+			Message: c.Commit.Message,
+			Author:  c.Commit.Author.Name,
+		})
+	}
+
+	return result
+}
+
+// matchesPathPrefixes returns true if the filename starts with any of the given prefixes.
+func matchesPathPrefixes(filename string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(filename, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // ghPackageVersion is a version from the GitHub Packages API.

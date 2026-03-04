@@ -203,6 +203,232 @@ func TestHandleUnreleased(t *testing.T) {
 	}
 }
 
+func TestGetUnreleasedData_WithImages(t *testing.T) {
+	ghSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/org/repo/compare/2026.60.1...main":
+			writeJSON(w, map[string]any{
+				"ahead_by": 3,
+				"commits": []map[string]any{
+					{"sha": "aaa111", "commit": map[string]any{
+						"message": "fix(agent): update entrypoint",
+						"author":  map[string]any{"name": "Alice"},
+					}},
+					{"sha": "bbb222", "commit": map[string]any{
+						"message": "feat(bridge): new endpoint",
+						"author":  map[string]any{"name": "Bob"},
+					}},
+					{"sha": "ccc333", "commit": map[string]any{
+						"message": "chore: bump versions",
+						"author":  map[string]any{"name": "Carol"},
+					}},
+				},
+				"files": []map[string]any{
+					{"filename": "images/agent/entrypoint.sh", "status": "modified"},
+					{"filename": "controller/internal/bridge/new.go", "status": "added"},
+					{"filename": ".rwx/agent-versions.lock", "status": "modified"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ghSrv.Close()
+
+	client := newTestGitHubClient(ghSrv.URL, "")
+
+	resp := GetUnreleasedData(context.Background(), UnreleasedConfig{
+		GitHub:  client,
+		Version: "test-v1",
+		Images: []ImageTrackConfig{
+			{
+				Name:  "agent",
+				Repo:  RepoRef{Owner: "org", Repo: "repo"},
+				Tag:   "2026.60.1",
+				Paths: []string{"images/agent/", ".rwx/agent-versions.lock"},
+			},
+		},
+	})
+
+	if len(resp.Images) != 1 {
+		t.Fatalf("got %d images, want 1", len(resp.Images))
+	}
+
+	img := resp.Images[0]
+	if img.Name != "agent" {
+		t.Errorf("image name=%q, want agent", img.Name)
+	}
+	if img.DeployedTag != "2026.60.1" {
+		t.Errorf("deployedTag=%q, want 2026.60.1", img.DeployedTag)
+	}
+	if img.AheadBy != 3 {
+		t.Errorf("aheadBy=%d, want 3", img.AheadBy)
+	}
+	if img.ImageAheadBy != 2 {
+		t.Errorf("imageAheadBy=%d, want 2", img.ImageAheadBy)
+	}
+	if len(img.Files) != 2 {
+		t.Fatalf("got %d files, want 2", len(img.Files))
+	}
+	if img.Error != "" {
+		t.Errorf("unexpected error: %s", img.Error)
+	}
+}
+
+func TestGetUnreleasedData_ImagesNoChanges(t *testing.T) {
+	ghSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{
+			"ahead_by": 0,
+			"commits":  []map[string]any{},
+			"files":    []map[string]any{},
+		})
+	}))
+	defer ghSrv.Close()
+
+	client := newTestGitHubClient(ghSrv.URL, "")
+
+	resp := GetUnreleasedData(context.Background(), UnreleasedConfig{
+		GitHub:  client,
+		Version: "v1",
+		Images: []ImageTrackConfig{
+			{
+				Name:  "agent",
+				Repo:  RepoRef{Owner: "org", Repo: "repo"},
+				Tag:   "2026.63.1",
+				Paths: []string{"images/agent/"},
+			},
+		},
+	})
+
+	if len(resp.Images) != 1 {
+		t.Fatalf("got %d images, want 1", len(resp.Images))
+	}
+	if resp.Images[0].ImageAheadBy != 0 {
+		t.Errorf("imageAheadBy=%d, want 0", resp.Images[0].ImageAheadBy)
+	}
+	if resp.Images[0].AheadBy != 0 {
+		t.Errorf("aheadBy=%d, want 0", resp.Images[0].AheadBy)
+	}
+}
+
+func TestHandleUnreleased_WithImages(t *testing.T) {
+	ghSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/org/repo/tags":
+			writeJSON(w, []ghTag{{Name: "2026.60.1"}})
+		case "/repos/org/repo/compare/2026.60.1...main":
+			writeJSON(w, map[string]any{
+				"ahead_by": 1,
+				"commits": []map[string]any{
+					{"sha": "abc1234", "commit": map[string]any{
+						"message": "fix: agent Dockerfile",
+						"author":  map[string]any{"name": "Dev"},
+					}},
+				},
+				"files": []map[string]any{
+					{"filename": "images/agent/Dockerfile", "status": "modified"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ghSrv.Close()
+
+	handler := HandleUnreleased(UnreleasedConfig{
+		GitHub:  newTestGitHubClient(ghSrv.URL, ""),
+		Repos:   []RepoRef{{Owner: "org", Repo: "repo"}},
+		Version: "test",
+		Images: []ImageTrackConfig{
+			{
+				Name:  "agent",
+				Repo:  RepoRef{Owner: "org", Repo: "repo"},
+				Tag:   "2026.60.1",
+				Paths: []string{"images/agent/"},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/unreleased", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200", w.Code)
+	}
+
+	var resp UnreleasedResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Images) != 1 {
+		t.Fatalf("got %d images, want 1", len(resp.Images))
+	}
+	if resp.Images[0].Name != "agent" {
+		t.Errorf("image name=%q, want agent", resp.Images[0].Name)
+	}
+	if resp.Images[0].ImageAheadBy != 1 {
+		t.Errorf("imageAheadBy=%d, want 1", resp.Images[0].ImageAheadBy)
+	}
+	if len(resp.Images[0].Files) != 1 {
+		t.Errorf("got %d files, want 1", len(resp.Images[0].Files))
+	}
+}
+
+func TestExtractImageTag_Unreleased(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"ghcr.io/groblegark/gasboat/agent:2026.63.1", "2026.63.1"},
+		{"ghcr.io/groblegark/gasboat/agent:latest", "latest"},
+		{"ghcr.io/groblegark/gasboat/agent", ""},
+		{"ghcr.io/groblegark/gasboat/agent@sha256:abc123", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := ExtractImageTag(tt.input)
+		if got != tt.want {
+			t.Errorf("ExtractImageTag(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestDefaultGasboatImageConfigs(t *testing.T) {
+	repo := RepoRef{Owner: "org", Repo: "gasboat"}
+
+	t.Run("all tags provided", func(t *testing.T) {
+		configs := DefaultGasboatImageConfigs(repo, "2026.63.1", "2026.63.1", "2026.63.1")
+		if len(configs) != 3 {
+			t.Fatalf("got %d configs, want 3", len(configs))
+		}
+		// Verify agent config.
+		if configs[0].Name != "agent" {
+			t.Errorf("configs[0].Name=%q, want agent", configs[0].Name)
+		}
+		if len(configs[0].Paths) == 0 {
+			t.Error("agent config should have paths")
+		}
+	})
+
+	t.Run("only agent tag", func(t *testing.T) {
+		configs := DefaultGasboatImageConfigs(repo, "", "2026.63.1", "")
+		if len(configs) != 1 {
+			t.Fatalf("got %d configs, want 1", len(configs))
+		}
+		if configs[0].Name != "agent" {
+			t.Errorf("configs[0].Name=%q, want agent", configs[0].Name)
+		}
+	})
+
+	t.Run("no tags", func(t *testing.T) {
+		configs := DefaultGasboatImageConfigs(repo, "", "", "")
+		if len(configs) != 0 {
+			t.Fatalf("got %d configs, want 0", len(configs))
+		}
+	})
+}
+
 func TestNewGitHubClientIfConfigured(t *testing.T) {
 	logger := slog.Default()
 

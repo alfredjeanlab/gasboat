@@ -443,3 +443,176 @@ func TestFirstLine(t *testing.T) {
 		t.Errorf("firstLine(single) = %q, want single", got)
 	}
 }
+
+func TestMatchesPathPrefixes(t *testing.T) {
+	tests := []struct {
+		filename string
+		prefixes []string
+		want     bool
+	}{
+		{"images/agent/Dockerfile", []string{"images/agent/"}, true},
+		{"images/agent/entrypoint.sh", []string{"images/agent/", ".rwx/"}, true},
+		{".rwx/docker.yml", []string{"images/agent/", ".rwx/docker.yml"}, true},
+		{".rwx/agent-versions.lock", []string{".rwx/agent-versions.lock"}, true},
+		{"controller/cmd/controller/main.go", []string{"images/agent/"}, false},
+		{"README.md", []string{"images/agent/", ".rwx/"}, false},
+		{"images/slack-bridge/Dockerfile", []string{"images/agent/"}, false},
+		{"", []string{"images/agent/"}, false},
+		{"images/agent/Dockerfile", nil, false},
+		{"images/agent/Dockerfile", []string{}, false},
+	}
+	for _, tt := range tests {
+		got := matchesPathPrefixes(tt.filename, tt.prefixes)
+		if got != tt.want {
+			t.Errorf("matchesPathPrefixes(%q, %v) = %v, want %v",
+				tt.filename, tt.prefixes, got, tt.want)
+		}
+	}
+}
+
+func TestGetImageUnreleased(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/org/repo/compare/2026.60.1...main" {
+			http.NotFound(w, r)
+			return
+		}
+		// Return a compare result with files.
+		writeJSON(w, map[string]any{
+			"ahead_by": 3,
+			"commits": []map[string]any{
+				{"sha": "aaa111", "commit": map[string]any{
+					"message": "fix(agent): update Dockerfile",
+					"author":  map[string]any{"name": "Alice"},
+				}},
+				{"sha": "bbb222", "commit": map[string]any{
+					"message": "feat(bridge): add endpoint",
+					"author":  map[string]any{"name": "Bob"},
+				}},
+				{"sha": "ccc333", "commit": map[string]any{
+					"message": "chore: update agent versions",
+					"author":  map[string]any{"name": "Carol"},
+				}},
+			},
+			"files": []map[string]any{
+				{"filename": "images/agent/Dockerfile", "status": "modified"},
+				{"filename": "controller/internal/bridge/api.go", "status": "added"},
+				{"filename": ".rwx/agent-versions.lock", "status": "modified"},
+				{"filename": "README.md", "status": "modified"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := newTestGitHubClient(srv.URL, "")
+	result := client.GetImageUnreleased(context.Background(), ImageTrackConfig{
+		Name:  "agent",
+		Repo:  RepoRef{Owner: "org", Repo: "repo"},
+		Tag:   "2026.60.1",
+		Paths: []string{"images/agent/", ".rwx/agent-versions.lock"},
+	}, "main")
+
+	if result.Error != nil {
+		t.Fatalf("unexpected error: %v", result.Error)
+	}
+	if result.Name != "agent" {
+		t.Errorf("name=%q, want agent", result.Name)
+	}
+	if result.DeployedTag != "2026.60.1" {
+		t.Errorf("deployedTag=%q, want 2026.60.1", result.DeployedTag)
+	}
+	if result.AheadBy != 3 {
+		t.Errorf("aheadBy=%d, want 3", result.AheadBy)
+	}
+	if result.ImageAheadBy != 2 {
+		t.Errorf("imageAheadBy=%d, want 2 (Dockerfile + versions.lock)", result.ImageAheadBy)
+	}
+	if len(result.Files) != 2 {
+		t.Fatalf("got %d files, want 2", len(result.Files))
+	}
+	if result.Files[0] != "images/agent/Dockerfile" {
+		t.Errorf("files[0]=%q, want images/agent/Dockerfile", result.Files[0])
+	}
+	if result.Files[1] != ".rwx/agent-versions.lock" {
+		t.Errorf("files[1]=%q, want .rwx/agent-versions.lock", result.Files[1])
+	}
+	if len(result.Commits) != 3 {
+		t.Errorf("got %d commits, want 3", len(result.Commits))
+	}
+}
+
+func TestGetImageUnreleased_NoChanges(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{
+			"ahead_by": 2,
+			"commits": []map[string]any{
+				{"sha": "aaa111", "commit": map[string]any{
+					"message": "docs: update readme",
+					"author":  map[string]any{"name": "Alice"},
+				}},
+			},
+			"files": []map[string]any{
+				{"filename": "README.md", "status": "modified"},
+				{"filename": "docs/guide.md", "status": "added"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := newTestGitHubClient(srv.URL, "")
+	result := client.GetImageUnreleased(context.Background(), ImageTrackConfig{
+		Name:  "agent",
+		Repo:  RepoRef{Owner: "org", Repo: "repo"},
+		Tag:   "2026.60.1",
+		Paths: []string{"images/agent/"},
+	}, "main")
+
+	if result.Error != nil {
+		t.Fatalf("unexpected error: %v", result.Error)
+	}
+	if result.ImageAheadBy != 0 {
+		t.Errorf("imageAheadBy=%d, want 0 (no agent files changed)", result.ImageAheadBy)
+	}
+	if len(result.Files) != 0 {
+		t.Errorf("got %d files, want 0", len(result.Files))
+	}
+}
+
+func TestGetImageUnreleased_EmptyTag(t *testing.T) {
+	client := newTestGitHubClient("http://unused", "")
+	result := client.GetImageUnreleased(context.Background(), ImageTrackConfig{
+		Name:  "agent",
+		Repo:  RepoRef{Owner: "org", Repo: "repo"},
+		Tag:   "",
+		Paths: []string{"images/agent/"},
+	}, "main")
+
+	if result.Error == nil {
+		t.Fatal("expected error for empty tag")
+	}
+	if !strings.Contains(result.Error.Error(), "no deployed tag") {
+		t.Errorf("unexpected error: %v", result.Error)
+	}
+}
+
+func TestImageToRepo(t *testing.T) {
+	tests := []struct {
+		image   string
+		wantRef RepoRef
+		wantOK  bool
+	}{
+		{"ghcr.io/groblegark/gasboat/agent:latest", RepoRef{Owner: "groblegark", Repo: "gasboat"}, true},
+		{"ghcr.io/groblegark/gasboat:2026.63.1", RepoRef{Owner: "groblegark", Repo: "gasboat"}, true},
+		{"ghcr.io/groblegark/kbeads:latest", RepoRef{Owner: "groblegark", Repo: "kbeads"}, true},
+		{"invalid", RepoRef{}, false},
+	}
+	for _, tt := range tests {
+		ref, ok := ImageToRepo(tt.image)
+		if ok != tt.wantOK {
+			t.Errorf("ImageToRepo(%q) ok=%v, want %v", tt.image, ok, tt.wantOK)
+			continue
+		}
+		if ok && ref != tt.wantRef {
+			t.Errorf("ImageToRepo(%q) = %v, want %v", tt.image, ref, tt.wantRef)
+		}
+	}
+}

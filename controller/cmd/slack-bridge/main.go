@@ -94,11 +94,15 @@ func main() {
 	})
 
 	// Unreleased changes API — same data as the /unreleased Slack command.
+	// Build image tracking configs from the gasboat repo using the bridge's
+	// own version as the deployed tag (all gasboat images share the calver tag).
+	imageConfigs := buildImageConfigs(cfg.repos, version)
 	mux.HandleFunc("/api/unreleased", bridge.HandleUnreleased(bridge.UnreleasedConfig{
 		GitHub:        bridge.NewGitHubClientIfConfigured(cfg.githubToken, cfg.repos, logger),
 		Repos:         cfg.repos,
 		ControllerURL: cfg.controllerURL,
 		Version:       version,
+		Images:        imageConfigs,
 	}))
 
 	// Decisions web UI and API.
@@ -130,6 +134,7 @@ func main() {
 			Version:          version,
 			ControllerURL:    cfg.controllerURL,
 			CoopmuxPublicURL: cfg.coopmuxPublicURL,
+			ImageConfigs:     imageConfigs,
 		})
 		notifier = bot
 		logger.Info("Slack Socket Mode bot enabled", "channel", cfg.slackChannel)
@@ -441,5 +446,18 @@ func init() {
 	if v := os.Getenv("VERSION"); v != "" {
 		version = v
 	}
+}
+
+// buildImageConfigs creates image tracking configs for gasboat images.
+// It finds the gasboat repo in the repos list and uses the given version
+// as the deployed tag for all images (they share the same calver tag).
+func buildImageConfigs(repos []bridge.RepoRef, deployedVersion string) []bridge.ImageTrackConfig {
+	// Find the gasboat repo in the configured list.
+	for _, r := range repos {
+		if r.Repo == "gasboat" {
+			return bridge.DefaultGasboatImageConfigs(r, deployedVersion, deployedVersion, deployedVersion)
+		}
+	}
+	return nil
 }
 
