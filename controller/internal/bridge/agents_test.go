@@ -536,7 +536,7 @@ func TestAgents_HandleUpdated_TaskReassigned(t *testing.T) {
 	})
 	a.handleUpdated(context.Background(), claimedTask)
 
-	// Step 2: Task reassigned to matt-2.
+	// Step 2: Task reassigned to matt-2 — should notify matt-2 (new) AND matt-1 (previous).
 	reassignedTask := marshalSSEBeadPayload(BeadEvent{
 		ID:       "task-22",
 		Type:     "task",
@@ -546,12 +546,16 @@ func TestAgents_HandleUpdated_TaskReassigned(t *testing.T) {
 	a.handleUpdated(context.Background(), reassignedTask)
 
 	updates := notif.getTaskUpdates()
-	if len(updates) != 2 {
-		t.Fatalf("expected 2 task updates (claim + reassign), got %d", len(updates))
+	if len(updates) != 3 {
+		t.Fatalf("expected 3 task updates (claim + new assignee + previous assignee), got %d", len(updates))
 	}
 	// The second notification goes to matt-2 (the new assignee).
 	if updates[1] != "matt-2" {
 		t.Errorf("expected matt-2 notified on reassign, got %s", updates[1])
+	}
+	// The third notification goes to matt-1 (the previous assignee) to clear stale task.
+	if updates[2] != "matt-1" {
+		t.Errorf("expected matt-1 (previous assignee) notified on reassign, got %s", updates[2])
 	}
 
 	// Verify tracking was updated: unassigning should now notify matt-2, not matt-1.
@@ -563,11 +567,11 @@ func TestAgents_HandleUpdated_TaskReassigned(t *testing.T) {
 	a.handleUpdated(context.Background(), unclaimedTask)
 
 	updates = notif.getTaskUpdates()
-	if len(updates) != 3 {
-		t.Fatalf("expected 3 task updates, got %d", len(updates))
+	if len(updates) != 4 {
+		t.Fatalf("expected 4 task updates, got %d", len(updates))
 	}
-	if updates[2] != "matt-2" {
-		t.Errorf("expected matt-2 (last assignee) notified on unclaim, got %s", updates[2])
+	if updates[3] != "matt-2" {
+		t.Errorf("expected matt-2 (last assignee) notified on unclaim, got %s", updates[3])
 	}
 }
 
