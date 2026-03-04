@@ -38,9 +38,12 @@ package main
 //   custom           — Arbitrary key-value pairs for advice-driven extensions
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"gasboat/controller/internal/advice"
 )
 
 // WrapUp is the structured wrap-up message stored on agent beads at stop time.
@@ -227,3 +230,54 @@ func WrapUpToComment(w *WrapUp) string {
 
 // WrapUpFieldName is the bead field key where the structured wrap-up is stored.
 const WrapUpFieldName = "wrapup"
+
+// WrapUpConfigCategory is the config bead category for wrap-up requirements.
+// Config beads with this title are resolved using the standard layered merge
+// system (global < rig < role < agent), allowing different roles to have
+// different wrap-up expectations.
+const WrapUpConfigCategory = "wrapup-config"
+
+// LoadWrapUpRequirements resolves wrap-up requirements from config beads
+// matching the agent's subscriptions. Falls back to DefaultWrapUpRequirements
+// if no config beads are found.
+//
+// The config bead value is a JSON object matching the WrapUpRequirements
+// schema. Example config bead (created via gb config load):
+//
+//	{
+//	  "title": "wrapup-config",
+//	  "labels": ["role:crew"],
+//	  "value": {
+//	    "required": ["accomplishments", "blockers"],
+//	    "optional": ["handoff_notes", "pull_requests"],
+//	    "enforce": "hard"
+//	  }
+//	}
+func LoadWrapUpRequirements(ctx context.Context, lister configBeadLister, agentID string) WrapUpRequirements {
+	subs := advice.BuildAgentSubscriptions(agentID, nil)
+	merged, count := ResolveConfigBeads(ctx, lister, WrapUpConfigCategory, subs)
+	if count == 0 || merged == nil {
+		return DefaultWrapUpRequirements()
+	}
+
+	// Re-serialize the merged map and unmarshal into WrapUpRequirements.
+	data, err := json.Marshal(merged)
+	if err != nil {
+		return DefaultWrapUpRequirements()
+	}
+
+	var reqs WrapUpRequirements
+	if err := json.Unmarshal(data, &reqs); err != nil {
+		return DefaultWrapUpRequirements()
+	}
+
+	// Apply defaults for unset fields.
+	if reqs.Enforce == "" {
+		reqs.Enforce = "soft"
+	}
+	if len(reqs.Required) == 0 && len(reqs.Optional) == 0 {
+		return DefaultWrapUpRequirements()
+	}
+
+	return reqs
+}

@@ -100,9 +100,8 @@ func runStop(cmd *cobra.Command, args []string) error {
 			return err
 		}
 
-		// Validate against requirements (default for now; advice-driven
-		// requirements will be loaded in a future task).
-		reqs := DefaultWrapUpRequirements()
+		// Validate against requirements from config beads (falls back to defaults).
+		reqs := LoadWrapUpRequirements(ctx, daemon, agentID)
 		if issues := reqs.Validate(wrapup); len(issues) > 0 {
 			if reqs.Enforce == "hard" && !stopForce {
 				fmt.Fprintf(os.Stderr, "Wrap-up validation failed:\n")

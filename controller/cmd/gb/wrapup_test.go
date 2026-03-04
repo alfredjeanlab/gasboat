@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
+
+	"gasboat/controller/internal/beadsapi"
 )
 
 func TestWrapUp_MarshalRoundTrip(t *testing.T) {
@@ -216,6 +219,115 @@ func TestWrapUpToComment_MinimalFields(t *testing.T) {
 	}
 	if containsStr(comment, "Blockers:") {
 		t.Errorf("WrapUpToComment should not include Blockers when empty:\n%s", comment)
+	}
+}
+
+func TestLoadWrapUpRequirements_DefaultWhenNoConfigBeads(t *testing.T) {
+	lister := &mockConfigBeadLister{beads: nil}
+	reqs := LoadWrapUpRequirements(context.Background(), lister, "test-agent")
+
+	defaults := DefaultWrapUpRequirements()
+	if reqs.Enforce != defaults.Enforce {
+		t.Errorf("Enforce = %q, want %q (default)", reqs.Enforce, defaults.Enforce)
+	}
+	if len(reqs.Required) != len(defaults.Required) {
+		t.Errorf("Required = %v, want %v (default)", reqs.Required, defaults.Required)
+	}
+}
+
+func TestLoadWrapUpRequirements_FromConfigBead(t *testing.T) {
+	lister := &mockConfigBeadLister{
+		beads: []*beadsapi.BeadDetail{
+			{
+				Title:       "wrapup-config",
+				Labels:      []string{"global"},
+				Description: `{"required":["accomplishments","blockers"],"enforce":"hard"}`,
+			},
+		},
+	}
+	reqs := LoadWrapUpRequirements(context.Background(), lister, "test-agent")
+
+	if reqs.Enforce != "hard" {
+		t.Errorf("Enforce = %q, want %q", reqs.Enforce, "hard")
+	}
+	if len(reqs.Required) != 2 {
+		t.Errorf("Required = %v, want [accomplishments blockers]", reqs.Required)
+	}
+}
+
+func TestLoadWrapUpRequirements_RoleOverridesGlobal(t *testing.T) {
+	lister := &mockConfigBeadLister{
+		beads: []*beadsapi.BeadDetail{
+			{
+				Title:       "wrapup-config",
+				Labels:      []string{"global"},
+				Description: `{"required":["accomplishments"],"enforce":"soft"}`,
+			},
+			{
+				Title:       "wrapup-config",
+				Labels:      []string{"role:crew"},
+				Description: `{"required":["accomplishments","blockers"],"enforce":"hard"}`,
+			},
+		},
+	}
+
+	// Agent with role:crew should get the role override.
+	// BuildAgentSubscriptions for "gasboat/crews/test-agent" includes role:crews and role:crew.
+	reqs := LoadWrapUpRequirements(context.Background(), lister, "gasboat/crews/test-agent")
+
+	if reqs.Enforce != "hard" {
+		t.Errorf("Enforce = %q, want %q (role override)", reqs.Enforce, "hard")
+	}
+	if len(reqs.Required) != 2 {
+		t.Errorf("Required = %v, want [accomplishments blockers]", reqs.Required)
+	}
+}
+
+func TestLoadWrapUpRequirements_CustomFields(t *testing.T) {
+	lister := &mockConfigBeadLister{
+		beads: []*beadsapi.BeadDetail{
+			{
+				Title:  "wrapup-config",
+				Labels: []string{"global"},
+				Description: `{
+					"required": ["accomplishments"],
+					"custom_fields": [
+						{"name": "risk_assessment", "description": "Risk level of changes", "required": true}
+					],
+					"enforce": "hard"
+				}`,
+			},
+		},
+	}
+	reqs := LoadWrapUpRequirements(context.Background(), lister, "test-agent")
+
+	if len(reqs.CustomFields) != 1 {
+		t.Fatalf("CustomFields = %v, want 1 entry", reqs.CustomFields)
+	}
+	if reqs.CustomFields[0].Name != "risk_assessment" {
+		t.Errorf("CustomFields[0].Name = %q, want %q", reqs.CustomFields[0].Name, "risk_assessment")
+	}
+	if !reqs.CustomFields[0].Required {
+		t.Error("CustomFields[0].Required should be true")
+	}
+}
+
+func TestLoadWrapUpRequirements_InvalidJSON(t *testing.T) {
+	lister := &mockConfigBeadLister{
+		beads: []*beadsapi.BeadDetail{
+			{
+				Title:       "wrapup-config",
+				Labels:      []string{"global"},
+				Description: `not valid json`,
+			},
+		},
+	}
+	reqs := LoadWrapUpRequirements(context.Background(), lister, "test-agent")
+
+	// Should fall back to defaults when config bead has invalid JSON.
+	defaults := DefaultWrapUpRequirements()
+	if reqs.Enforce != defaults.Enforce {
+		t.Errorf("Enforce = %q, want %q (default fallback)", reqs.Enforce, defaults.Enforce)
 	}
 }
 

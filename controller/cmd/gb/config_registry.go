@@ -73,6 +73,11 @@ var configCategories = []ConfigCategory{
 		Strategy:    MergeOverride,
 		Description: "Agent instruction text (workflow context, lifecycle, stop gate) — consumed by gb prime",
 	},
+	{
+		Name:        "wrapup-config",
+		Strategy:    MergeOverride,
+		Description: "Wrap-up message requirements for gb stop (required fields, enforcement level, custom fields)",
+	},
 }
 
 // configCategoryMap provides O(1) lookup by category name.
