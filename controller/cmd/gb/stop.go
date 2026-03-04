@@ -9,6 +9,7 @@ package main
 // tracking this pod.
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -40,6 +41,7 @@ logs as stale instead, causing the next spawn to start a fresh conversation.
 Usage:
   gb stop                          # request despawn, then exit normally
   gb stop --reason "finished work" # leave a note on the agent bead
+  gb stop --wrapup '{"accomplishments":"Closed 3 bugs","blockers":"API key pending"}'
   gb stop --clean                  # also retire session JSONL (fresh start on re-spawn)
   gb stop --force                  # skip in-progress work check`,
 	GroupID: "session",
@@ -50,12 +52,14 @@ var (
 	stopForce  bool
 	stopReason string
 	stopClean  bool
+	stopWrapUp string
 )
 
 func init() {
 	stopCmd.Flags().BoolVar(&stopForce, "force", false, "skip in-progress work check")
 	stopCmd.Flags().StringVar(&stopReason, "reason", "", "reason for stopping (added as a comment on the agent bead)")
 	stopCmd.Flags().BoolVar(&stopClean, "clean", false, "retire session JSONL so next spawn starts a fresh conversation")
+	stopCmd.Flags().StringVar(&stopWrapUp, "wrapup", "", "structured wrap-up message as JSON (see WrapUp schema)")
 }
 
 func runStop(cmd *cobra.Command, args []string) error {
@@ -84,17 +88,61 @@ func runStop(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Add a comment to the agent bead explaining the stop reason.
-	reason := stopReason
-	if reason == "" {
-		reason = "agent self-stopped"
-	}
 	commentAuthor := actor
 	if commentAuthor == "" || commentAuthor == "unknown" {
 		commentAuthor = agentID
 	}
-	if err := daemon.AddComment(ctx, agentID, commentAuthor, "gb stop: "+reason); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not add stop comment: %v\n", err)
+
+	// Handle structured wrap-up if --wrapup is provided.
+	if stopWrapUp != "" {
+		wrapup, commentText, err := processWrapUp(stopWrapUp)
+		if err != nil {
+			return err
+		}
+
+		// Validate against requirements (default for now; advice-driven
+		// requirements will be loaded in a future task).
+		reqs := DefaultWrapUpRequirements()
+		if issues := reqs.Validate(wrapup); len(issues) > 0 {
+			if reqs.Enforce == "hard" && !stopForce {
+				fmt.Fprintf(os.Stderr, "Wrap-up validation failed:\n")
+				for _, issue := range issues {
+					fmt.Fprintf(os.Stderr, "  - %s\n", issue)
+				}
+				fmt.Fprintf(os.Stderr, "\nUse --force to override.\n")
+				return fmt.Errorf("wrap-up incomplete — use --force to override")
+			}
+			// Soft enforcement: warn but proceed.
+			for _, issue := range issues {
+				fmt.Fprintf(os.Stderr, "Warning: %s\n", issue)
+			}
+		}
+
+		// Store structured wrap-up as a JSON field on the agent bead.
+		wrapupJSON, err := MarshalWrapUp(wrapup)
+		if err != nil {
+			return fmt.Errorf("serializing wrap-up: %w", err)
+		}
+		if err := daemon.UpdateBeadFields(ctx, agentID, map[string]string{
+			WrapUpFieldName: wrapupJSON,
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not store wrap-up: %v\n", err)
+		}
+
+		// Also add a human-readable comment for the activity log.
+		if err := daemon.AddComment(ctx, agentID, commentAuthor, commentText); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not add wrap-up comment: %v\n", err)
+		}
+		fmt.Println("Wrap-up recorded.")
+	} else {
+		// Legacy path: use --reason or default message.
+		reason := stopReason
+		if reason == "" {
+			reason = "agent self-stopped"
+		}
+		if err := daemon.AddComment(ctx, agentID, commentAuthor, "gb stop: "+reason); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not add stop comment: %v\n", err)
+		}
 	}
 
 	// --clean: retire all session JSONL files so next spawn starts fresh.
@@ -205,6 +253,17 @@ func currentBranch(dir string) string {
 		return "unknown"
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// processWrapUp parses the --wrapup flag value into a WrapUp struct and
+// generates a human-readable comment. The flag value must be valid JSON
+// matching the WrapUp schema.
+func processWrapUp(raw string) (*WrapUp, string, error) {
+	var w WrapUp
+	if err := json.Unmarshal([]byte(raw), &w); err != nil {
+		return nil, "", fmt.Errorf("invalid --wrapup JSON: %w\nExpected format: {\"accomplishments\":\"...\",\"blockers\":\"...\",\"handoff_notes\":\"...\"}", err)
+	}
+	return &w, WrapUpToComment(&w), nil
 }
 
 // retireAgentSessions renames all .jsonl session logs under ~/.claude/projects/

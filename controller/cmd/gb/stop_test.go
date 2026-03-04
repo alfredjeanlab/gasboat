@@ -202,3 +202,62 @@ func TestCheckDelivery_NotAGitRepo(t *testing.T) {
 	}
 }
 
+func TestProcessWrapUp_ValidJSON(t *testing.T) {
+	raw := `{"accomplishments":"Closed 3 bugs","blockers":"API key pending","handoff_notes":"Check PR #42"}`
+
+	w, comment, err := processWrapUp(raw)
+	if err != nil {
+		t.Fatalf("processWrapUp: %v", err)
+	}
+	if w.Accomplishments != "Closed 3 bugs" {
+		t.Errorf("Accomplishments = %q, want %q", w.Accomplishments, "Closed 3 bugs")
+	}
+	if w.Blockers != "API key pending" {
+		t.Errorf("Blockers = %q, want %q", w.Blockers, "API key pending")
+	}
+	if comment == "" {
+		t.Error("comment should not be empty")
+	}
+	if !strings.Contains(comment, "Closed 3 bugs") {
+		t.Errorf("comment missing accomplishments: %q", comment)
+	}
+}
+
+func TestProcessWrapUp_InvalidJSON(t *testing.T) {
+	_, _, err := processWrapUp("not json")
+	if err == nil {
+		t.Fatal("processWrapUp should fail on invalid JSON")
+	}
+	if !strings.Contains(err.Error(), "invalid --wrapup JSON") {
+		t.Errorf("error = %q, want it to mention 'invalid --wrapup JSON'", err.Error())
+	}
+}
+
+func TestProcessWrapUp_EmptyObject(t *testing.T) {
+	w, _, err := processWrapUp("{}")
+	if err != nil {
+		t.Fatalf("processWrapUp: %v", err)
+	}
+	if w.Accomplishments != "" {
+		t.Errorf("Accomplishments = %q, want empty", w.Accomplishments)
+	}
+}
+
+func TestProcessWrapUp_WithBeadsAndPRs(t *testing.T) {
+	raw := `{"accomplishments":"work done","beads_closed":["kd-1","kd-2"],"pull_requests":["https://github.com/org/repo/pull/1"]}`
+
+	w, comment, err := processWrapUp(raw)
+	if err != nil {
+		t.Fatalf("processWrapUp: %v", err)
+	}
+	if len(w.BeadsClosed) != 2 {
+		t.Errorf("BeadsClosed = %v, want 2 entries", w.BeadsClosed)
+	}
+	if len(w.PullRequests) != 1 {
+		t.Errorf("PullRequests = %v, want 1 entry", w.PullRequests)
+	}
+	if !strings.Contains(comment, "kd-1") {
+		t.Errorf("comment missing bead ID: %q", comment)
+	}
+}
+
