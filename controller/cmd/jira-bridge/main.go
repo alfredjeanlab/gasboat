@@ -43,6 +43,7 @@ func main() {
 		"jira_base_url", cfg.jiraBaseURL,
 		"jira_projects", cfg.jiraProjects,
 		"jira_disable_transitions", cfg.jiraDisableTransitions,
+		"jira_enable_claim_transition", cfg.jiraEnableClaimTransition,
 		"listen_addr", cfg.listenAddr)
 
 	// Create beads daemon HTTP client.
@@ -133,10 +134,11 @@ func main() {
 
 	// Register JIRA sync handler on the SSE stream.
 	jiraSync := bridge.NewJiraSync(bridge.JiraSyncConfig{
-		Jira:               jiraClient,
-		Logger:             logger,
-		DisableTransitions: cfg.jiraDisableTransitions,
-		BotAccountID:       cfg.jiraBotAccountID,
+		Jira:                  jiraClient,
+		Logger:                logger,
+		DisableTransitions:    cfg.jiraDisableTransitions,
+		EnableClaimTransition: cfg.jiraEnableClaimTransition,
+		BotAccountID:          cfg.jiraBotAccountID,
 	})
 	jiraSync.RegisterHandlers(sseStream)
 
@@ -174,8 +176,9 @@ type config struct {
 	jiraIssueTypes   []string
 	jiraProjectMap         map[string]string // JIRA prefix (upper) → boat project name
 	jiraPollInterval       time.Duration
-	jiraDisableTransitions bool
-	jiraBotAccountID       string // optional: JIRA account ID for self-assignment
+	jiraDisableTransitions    bool
+	jiraEnableClaimTransition bool   // override: allow "In Progress" on claim even when disable is true
+	jiraBotAccountID          string // optional: JIRA account ID for self-assignment
 	listenAddr             string
 	logLevel               string
 	statePath              string
@@ -190,6 +193,7 @@ func parseConfig() *config {
 	}
 
 	disableTransitions := os.Getenv("JIRA_DISABLE_TRANSITIONS")
+	enableClaimTransition := os.Getenv("JIRA_ENABLE_CLAIM_TRANSITION")
 
 	return &config{
 		beadsHTTPAddr:          envOrDefault("BEADS_HTTP_ADDR", "http://localhost:8080"),
@@ -201,8 +205,9 @@ func parseConfig() *config {
 		jiraIssueTypes:         splitCSV(envOrDefault("JIRA_ISSUE_TYPES", "Bug,Task,Story,Epic")),
 		jiraProjectMap:         parseBoatProjects(os.Getenv("BOAT_PROJECTS")),
 		jiraPollInterval:       pollInterval,
-		jiraDisableTransitions: disableTransitions == "true" || disableTransitions == "1",
-		jiraBotAccountID:       os.Getenv("JIRA_BOT_ACCOUNT_ID"),
+		jiraDisableTransitions:    disableTransitions == "true" || disableTransitions == "1",
+		jiraEnableClaimTransition: enableClaimTransition == "true" || enableClaimTransition == "1",
+		jiraBotAccountID:          os.Getenv("JIRA_BOT_ACCOUNT_ID"),
 		listenAddr:             envOrDefault("JIRA_LISTEN_ADDR", ":8091"),
 		logLevel:               envOrDefault("LOG_LEVEL", "info"),
 		statePath:              envOrDefault("STATE_PATH", "/tmp/jira-bridge-state.json"),

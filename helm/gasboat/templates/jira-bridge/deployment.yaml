@@ -86,6 +86,10 @@ spec:
             - name: JIRA_DISABLE_TRANSITIONS
               value: "true"
             {{- end }}
+            {{- if .Values.jiraBridge.jira.enableClaimTransition }}
+            - name: JIRA_ENABLE_CLAIM_TRANSITION
+              value: "true"
+            {{- end }}
             {{- if .Values.jiraBridge.jira.botAccountID }}
             - name: JIRA_BOT_ACCOUNT_ID
               value: {{ .Values.jiraBridge.jira.botAccountID | quote }}

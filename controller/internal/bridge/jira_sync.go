@@ -18,10 +18,11 @@ const syncTTL = 10 * time.Minute
 
 // JiraSync watches bead SSE events and syncs MR links and status back to JIRA.
 type JiraSync struct {
-	jira               *JiraClient
-	logger             *slog.Logger
-	disableTransitions bool
-	botAccountID       string // optional JIRA account ID for self-assignment
+	jira                   *JiraClient
+	logger                 *slog.Logger
+	disableTransitions     bool
+	enableClaimTransition  bool   // override: allow "In Progress" on claim even when disableTransitions is true
+	botAccountID           string // optional JIRA account ID for self-assignment
 
 	mu   sync.Mutex
 	seen map[string]time.Time // dedup key → last sync time
@@ -29,20 +30,22 @@ type JiraSync struct {
 
 // JiraSyncConfig holds configuration for the JiraSync watcher.
 type JiraSyncConfig struct {
-	Jira               *JiraClient
-	Logger             *slog.Logger
-	DisableTransitions bool
-	BotAccountID       string // optional: JIRA account ID for self-assignment
+	Jira                  *JiraClient
+	Logger                *slog.Logger
+	DisableTransitions    bool
+	EnableClaimTransition bool   // override: allow "In Progress" on claim even when DisableTransitions is true
+	BotAccountID          string // optional: JIRA account ID for self-assignment
 }
 
 // NewJiraSync creates a new JIRA sync-back watcher.
 func NewJiraSync(cfg JiraSyncConfig) *JiraSync {
 	return &JiraSync{
-		jira:               cfg.Jira,
-		logger:             cfg.Logger,
-		disableTransitions: cfg.DisableTransitions,
-		botAccountID:       cfg.BotAccountID,
-		seen:               make(map[string]time.Time),
+		jira:                  cfg.Jira,
+		logger:                cfg.Logger,
+		disableTransitions:    cfg.DisableTransitions,
+		enableClaimTransition: cfg.EnableClaimTransition,
+		botAccountID:          cfg.BotAccountID,
+		seen:                  make(map[string]time.Time),
 	}
 }
 
@@ -85,7 +88,7 @@ func (s *JiraSync) handleUpdated(ctx context.Context, data []byte) {
 					"jira_key", jiraKey, "error", err)
 			}
 
-			if !s.disableTransitions {
+			if s.enableClaimTransition || !s.disableTransitions {
 				if err := s.jira.TransitionIssue(ctx, jiraKey, "In Progress"); err != nil {
 					s.logger.Warn("failed to transition JIRA issue to In Progress",
 						"jira_key", jiraKey, "error", err)

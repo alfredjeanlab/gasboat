@@ -399,6 +399,84 @@ func TestJiraSync_Claimed_WithBotAssignment(t *testing.T) {
 	}
 }
 
+func TestJiraSync_Claimed_ClaimTransitionOverride(t *testing.T) {
+	var (
+		mu              sync.Mutex
+		transitionCalls int
+		transitionName  string
+	)
+
+	jiraServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/rest/api/3/issue/PE-800/comment":
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"id":"1"}`)
+		case r.Method == "PUT" && r.URL.Path == "/rest/api/3/issue/PE-800":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == "GET" && r.URL.Path == "/rest/api/3/issue/PE-800/transitions":
+			resp := map[string]any{"transitions": []map[string]any{
+				{"id": "21", "name": "In Progress", "to": map[string]string{"name": "In Progress"}},
+				{"id": "41", "name": "Review", "to": map[string]string{"name": "Review"}},
+			}}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.Method == "POST" && r.URL.Path == "/rest/api/3/issue/PE-800/transitions":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if t, ok := body["transition"].(map[string]any); ok {
+				transitionName, _ = t["id"].(string)
+			}
+			transitionCalls++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer jiraServer.Close()
+
+	// DisableTransitions=true but EnableClaimTransition=true → claim transition should fire.
+	s := NewJiraSync(JiraSyncConfig{
+		Jira:                  newTestJiraClient(jiraServer.URL),
+		Logger:                slog.Default(),
+		DisableTransitions:    true,
+		EnableClaimTransition: true,
+	})
+	event := marshalSSEBeadPayload(BeadEvent{
+		ID: "bd-task-13", Type: "task", Title: "[PE-800] Fix dashboard",
+		Status:   "in_progress",
+		Assignee: "agent-worker-4",
+		Labels:   []string{"source:jira", "jira:PE-800"},
+		Fields:   map[string]string{"jira_key": "PE-800"},
+	})
+	s.handleUpdated(context.Background(), event)
+
+	mu.Lock()
+	if transitionCalls != 1 {
+		t.Errorf("expected 1 transition call (In Progress) with EnableClaimTransition override, got %d", transitionCalls)
+	}
+	if transitionName != "21" {
+		t.Errorf("expected transition ID 21 (In Progress), got %s", transitionName)
+	}
+	mu.Unlock()
+
+	// Verify Review transition is still blocked — send mr_merged event.
+	// Must release lock before calling handleUpdated since the mock handler needs it.
+	s.handleUpdated(context.Background(), marshalSSEBeadPayload(BeadEvent{
+		ID: "bd-task-14", Type: "task", Title: "[PE-800] Fix dashboard",
+		Labels: []string{"source:jira", "jira:PE-800"},
+		Fields: map[string]string{"jira_key": "PE-800", "mr_merged": "true"},
+	}))
+
+	mu.Lock()
+	defer mu.Unlock()
+	// transitionCalls should still be 1 (Review blocked by DisableTransitions).
+	if transitionCalls != 1 {
+		t.Errorf("expected Review transition to be blocked (DisableTransitions=true), got %d total transition calls", transitionCalls)
+	}
+}
+
 func TestJiraSync_Claimed_Dedup(t *testing.T) {
 	var (
 		mu           sync.Mutex
