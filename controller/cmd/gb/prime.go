@@ -61,6 +61,11 @@ func runPrime(cmd *cobra.Command, args []string) error {
 		outputAdvice(w, agentID)
 	}
 
+	// 2b. Wrap-up expectations.
+	if agentID != "" {
+		outputWrapUpExpectations(w, agentID)
+	}
+
 	// 3. Jack awareness.
 	outputJackSection(w)
 

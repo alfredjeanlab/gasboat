@@ -41,6 +41,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 
 	"gasboat/controller/internal/advice"
@@ -230,6 +231,69 @@ func WrapUpToComment(w *WrapUp) string {
 
 // WrapUpFieldName is the bead field key where the structured wrap-up is stored.
 const WrapUpFieldName = "wrapup"
+
+// OutputWrapUpExpectations writes a markdown section describing wrap-up
+// requirements to w. Called by gb prime to inject expectations into agent
+// context. If no config beads are found, outputs default expectations.
+func outputWrapUpExpectations(w io.Writer, agentID string) {
+	ctx := context.Background()
+	reqs := LoadWrapUpRequirements(ctx, daemon, agentID)
+
+	// Don't output anything if enforcement is disabled.
+	if reqs.Enforce == "none" {
+		return
+	}
+
+	fmt.Fprintf(w, "\n## Wrap-Up Requirements\n\n")
+
+	switch reqs.Enforce {
+	case "hard":
+		fmt.Fprintln(w, "You **must** provide a structured wrap-up when calling `gb stop`.")
+	default:
+		fmt.Fprintln(w, "You **should** provide a structured wrap-up when calling `gb stop`.")
+	}
+
+	fmt.Fprintln(w, "")
+
+	if len(reqs.Required) > 0 {
+		fmt.Fprint(w, "**Required fields:** ")
+		for i, f := range reqs.Required {
+			if i > 0 {
+				fmt.Fprint(w, ", ")
+			}
+			fmt.Fprintf(w, "`%s`", f)
+		}
+		fmt.Fprintln(w)
+	}
+
+	if len(reqs.Optional) > 0 {
+		fmt.Fprint(w, "**Optional fields:** ")
+		for i, f := range reqs.Optional {
+			if i > 0 {
+				fmt.Fprint(w, ", ")
+			}
+			fmt.Fprintf(w, "`%s`", f)
+		}
+		fmt.Fprintln(w)
+	}
+
+	if len(reqs.CustomFields) > 0 {
+		fmt.Fprintln(w, "**Custom fields:**")
+		for _, cf := range reqs.CustomFields {
+			reqStr := "optional"
+			if cf.Required {
+				reqStr = "required"
+			}
+			if cf.Description != "" {
+				fmt.Fprintf(w, "- `%s` (%s) — %s\n", cf.Name, reqStr, cf.Description)
+			} else {
+				fmt.Fprintf(w, "- `%s` (%s)\n", cf.Name, reqStr)
+			}
+		}
+	}
+
+	fmt.Fprintf(w, "\n**Example:**\n```bash\ngb stop --wrapup '{\"accomplishments\":\"...\",\"blockers\":\"...\",\"handoff_notes\":\"...\"}'\n```\n")
+}
 
 // WrapUpConfigCategory is the config bead category for wrap-up requirements.
 // Config beads with this title are resolved using the standard layered merge
