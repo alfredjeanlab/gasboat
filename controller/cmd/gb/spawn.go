@@ -1,11 +1,14 @@
 package main
 
-// gb spawn — CLI equivalent of Slack /spawn.
+// gb spawn — Spawn a new agent with auto-generated name.
+// gb start — Start a named agent (explicit name required).
 //
 // Usage:
 //
-//	gb spawn <name> <project> [flags]
-//	gb spawn <project> --task <bead-id>      (task-first: auto-generate name)
+//	gb spawn [flags]                            (auto-name, project from env)
+//	gb spawn --task <bead-id>                   (auto-name from task title)
+//	gb start <name> <project> [flags]           (explicit name)
+//	gb start <project> --task <bead-id>         (task-first: auto-generate name)
 //
 // Flags:
 //
@@ -23,32 +26,101 @@ import (
 )
 
 var spawnCmd = &cobra.Command{
-	Use:   "spawn <name> <project> [flags]",
-	Short: "Spawn a new agent",
-	Long: `Spawn a new agent by creating an agent bead. The reconciler picks it up
-and schedules a K8s pod.
+	Use:   "spawn [flags]",
+	Short: "Spawn a new agent (auto-named)",
+	Long: `Spawn a new agent with an auto-generated name. The project is taken from
+BOAT_PROJECT or inferred from the task's labels.
 
-  gb spawn fix-auth monorepo --role engineer --task kd-abc123
-  gb spawn review-pr gasboat --prompt 'Review PR #42 for security issues'
-  gb spawn repro-bug monorepo --role engineer --task kd-xyz789
+  gb spawn                                    # auto-name, project from env
+  gb spawn --task kd-abc123                   # name from task title
+  gb spawn --task kd-abc123 --role engineer   # with role
+  gb spawn --prompt 'Review PR #42'           # with custom prompt
+
+Use 'gb start' if you need to specify an explicit agent name.`,
+	GroupID: "agent",
+	Args:    cobra.NoArgs,
+	RunE:    runSpawn,
+}
+
+var startCmd = &cobra.Command{
+	Use:   "start <name> <project> [flags]",
+	Short: "Start a named agent",
+	Long: `Start a new agent with an explicit name. This is the power-user variant
+of 'gb spawn' for when you need control over the agent name.
+
+  gb start fix-auth monorepo --role engineer --task kd-abc123
+  gb start review-pr gasboat --prompt 'Review PR #42 for security issues'
 
 Task-first mode (auto-generate agent name from task title):
-  gb spawn gasboat --task kd-abc123
+  gb start gasboat --task kd-abc123
 
 When --task is a ticket reference (e.g. PE-1234), it is resolved to a bead ID
 and the project is inferred from the ticket's labels if not specified.`,
 	GroupID: "agent",
 	Args:    cobra.RangeArgs(1, 2),
-	RunE:    runSpawn,
+	RunE:    runStart,
 }
 
 func init() {
 	spawnCmd.Flags().String("role", "crew", "Agent role (e.g. crew, captain, engineer)")
 	spawnCmd.Flags().String("task", "", "Pre-assign a task bead (bead ID or ticket reference)")
 	spawnCmd.Flags().String("prompt", "", "Custom prompt injected at agent startup")
+
+	startCmd.Flags().String("role", "crew", "Agent role (e.g. crew, captain, engineer)")
+	startCmd.Flags().String("task", "", "Pre-assign a task bead (bead ID or ticket reference)")
+	startCmd.Flags().String("prompt", "", "Custom prompt injected at agent startup")
 }
 
-func runSpawn(cmd *cobra.Command, args []string) error {
+// runSpawn handles 'gb spawn' — auto-generates agent name, project from env/task.
+func runSpawn(cmd *cobra.Command, _ []string) error {
+	role, _ := cmd.Flags().GetString("role")
+	taskID, _ := cmd.Flags().GetString("task")
+	customPrompt, _ := cmd.Flags().GetString("prompt")
+
+	ctx := cmd.Context()
+
+	// Resolve ticket references (e.g. PE-1234) to bead IDs.
+	var taskProject string
+	if taskID != "" && !strings.HasPrefix(taskID, "kd-") {
+		if spawnTicketRefRe.MatchString(taskID) {
+			bead, err := daemon.ResolveTicket(ctx, taskID)
+			if err != nil {
+				return fmt.Errorf("resolving ticket %q: %w", taskID, err)
+			}
+			taskID = bead.ID
+			taskProject = spawnProjectFromLabels(bead.Labels)
+		}
+	}
+
+	// Auto-generate agent name.
+	agentName := ""
+	if taskID != "" {
+		taskBead, err := daemon.GetBead(ctx, taskID)
+		if err != nil {
+			return fmt.Errorf("looking up task %q: %w", taskID, err)
+		}
+		agentName = spawnGenerateAgentName(taskBead.Title)
+	}
+
+	// Resolve project.
+	project := taskProject
+	if project == "" {
+		project = defaultProject()
+	}
+	if project == "" {
+		return fmt.Errorf("project is required: set BOAT_PROJECT or use --task with a project-labeled bead")
+	}
+
+	// Fall back to project-based name if no task.
+	if agentName == "" {
+		agentName = spawnGenerateSpawnName(project)
+	}
+
+	return spawnAndPrint(cmd, agentName, project, taskID, role, customPrompt)
+}
+
+// runStart handles 'gb start' — explicit agent name required (old 'gb spawn' behavior).
+func runStart(cmd *cobra.Command, args []string) error {
 	role, _ := cmd.Flags().GetString("role")
 	taskID, _ := cmd.Flags().GetString("task")
 	customPrompt, _ := cmd.Flags().GetString("prompt")
@@ -72,21 +144,20 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 
 	switch len(args) {
 	case 2:
-		// gb spawn <name> <project>
+		// gb start <name> <project>
 		agentName = args[0]
 		project = args[1]
 	case 1:
 		if taskID != "" {
-			// Task-first mode: gb spawn <project> --task <id>
+			// Task-first mode: gb start <project> --task <id>
 			project = args[0]
-			// Auto-generate agent name from task title.
 			taskBead, err := daemon.GetBead(ctx, taskID)
 			if err != nil {
 				return fmt.Errorf("looking up task %q: %w", taskID, err)
 			}
 			agentName = spawnGenerateAgentName(taskBead.Title)
 		} else {
-			// gb spawn <name> — project from env.
+			// gb start <name> — project from env.
 			agentName = args[0]
 			project = defaultProject()
 		}
@@ -111,7 +182,12 @@ func runSpawn(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid agent name %q — use lowercase letters, digits, and hyphens only", agentName)
 	}
 
-	beadID, err := daemon.SpawnAgent(ctx, agentName, project, taskID, role, customPrompt)
+	return spawnAndPrint(cmd, agentName, project, taskID, role, customPrompt)
+}
+
+// spawnAndPrint creates the agent bead and prints the result.
+func spawnAndPrint(cmd *cobra.Command, agentName, project, taskID, role, customPrompt string) error {
+	beadID, err := daemon.SpawnAgent(cmd.Context(), agentName, project, taskID, role, customPrompt)
 	if err != nil {
 		return fmt.Errorf("spawning agent %q: %w", agentName, err)
 	}
@@ -189,6 +265,15 @@ func spawnGenerateAgentName(title string) string {
 		slugWords = []string{"agent"}
 	}
 	return strings.Join(slugWords, "-") + "-" + spawnRandomSuffix(3)
+}
+
+// spawnGenerateSpawnName creates a name from a project with a random suffix.
+func spawnGenerateSpawnName(project string) string {
+	prefix := project
+	if prefix == "" {
+		prefix = "agent"
+	}
+	return prefix + "-" + spawnRandomSuffix(4)
 }
 
 // spawnRandomSuffix returns a random string of n lowercase alphanumeric characters.

@@ -34,7 +34,13 @@
       },
       {
         "command": "/spawn",
-        "description": "Spawn a new agent",
+        "description": "Spawn a new agent (auto-named, project from channel)",
+        "usage_hint": "[task] [--role <role>]",
+        "should_escape": false
+      },
+      {
+        "command": "/start",
+        "description": "Start a named agent",
         "usage_hint": "<agent> [project] [task] [--role <role>]",
         "should_escape": false
       },

@@ -21,6 +21,8 @@ func (b *Bot) handleSlashCommand(ctx context.Context, cmd slack.SlashCommand) {
 		b.handleRosterCommand(ctx, cmd)
 	case "/spawn":
 		b.handleSpawnCommand(ctx, cmd)
+	case "/start":
+		b.handleStartCommand(ctx, cmd)
 	case "/kill":
 		b.handleKillCommand(ctx, cmd)
 	case "/unreleased":
@@ -31,20 +33,123 @@ func (b *Bot) handleSlashCommand(ctx context.Context, cmd slack.SlashCommand) {
 }
 
 // handleSpawnCommand processes the /spawn slash command.
-// Usage: /spawn <agent> [project|ticket|"PROMPT TEXT"] [task] [--role <role>]
+// Usage: /spawn [task|ticket] [--role <role>]
 //
-//	/spawn "task description" [project] [--role <role>]
-//
-// In task-first mode (first arg contains spaces), the task description is used
-// to auto-generate an agent name and create a task bead automatically.
-// When the second argument is a quoted string, it is used as a custom prompt.
-// When it looks like a ticket reference (PE-1234, kd-xxx), it is resolved to a
-// bead ID and the project is inferred from the ticket's labels or prefix.
+// The new /spawn does NOT require an agent name — it auto-generates one.
+// Project is inferred from the channel's default project (via project beads'
+// slack_channel field). If no channel mapping exists, the user must use /start
+// which accepts an explicit agent name and project.
 func (b *Bot) handleSpawnCommand(ctx context.Context, cmd slack.SlashCommand) {
+	args := splitQuotedArgs(strings.TrimSpace(cmd.Text))
+
+	// Extract --role flag from args, leaving positional args intact.
+	role := ""
+	positional := args[:0]
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--role" && i+1 < len(args) {
+			role = args[i+1]
+			i++ // skip value
+		} else if v, ok := strings.CutPrefix(args[i], "--role="); ok {
+			role = v
+		} else {
+			positional = append(positional, args[i])
+		}
+	}
+
+	// Resolve project from channel.
+	project := b.projectFromChannel(ctx, cmd.ChannelID)
+
+	taskID := ""
+
+	// If the first positional arg contains spaces, it's a task description
+	// (task-first mode, same as before).
+	if len(positional) > 0 && strings.Contains(positional[0], " ") {
+		// Task-first mode: create a task bead, auto-generate name from description.
+		taskDescription := positional[0]
+		agentName := generateAgentName(taskDescription)
+
+		// Validate project exists.
+		if project != "" {
+			if !b.validateProject(ctx, cmd, project) {
+				return
+			}
+		}
+
+		// Create a task bead for the description.
+		var labels []string
+		if project != "" {
+			labels = []string{"project:" + project}
+		}
+		var err error
+		taskID, err = b.daemon.CreateBead(ctx, beadsapi.CreateBeadRequest{
+			Title:    taskDescription,
+			Type:     "task",
+			Kind:     "issue",
+			Labels:   labels,
+			Priority: 2,
+		})
+		if err != nil {
+			b.logger.Error("failed to create task bead", "error", err)
+			_, _ = b.api.PostEphemeral(cmd.ChannelID, cmd.UserID,
+				slack.MsgOptionText(fmt.Sprintf(":x: Failed to create task: %s", err.Error()), false))
+			return
+		}
+
+		b.spawnAndRespond(ctx, cmd, agentName, project, taskID, role, "")
+		return
+	}
+
+	// If a positional arg is a ticket/bead reference, resolve it.
+	if len(positional) > 0 && isTicketRef(positional[0]) {
+		bead, err := b.daemon.ResolveTicket(ctx, positional[0])
+		if err != nil {
+			b.logger.Error("failed to resolve ticket", "ticket", positional[0], "error", err)
+			_, _ = b.api.PostEphemeral(cmd.ChannelID, cmd.UserID,
+				slack.MsgOptionText(fmt.Sprintf(":x: Could not resolve ticket %q: %s", positional[0], err.Error()), false))
+			return
+		}
+		taskID = bead.ID
+		// Infer project from ticket if channel didn't provide one.
+		if project == "" {
+			project = projectFromLabels(bead.Labels)
+			if project == "" {
+				project = b.projectFromTicketPrefix(ctx, positional[0])
+			}
+		}
+	}
+
+	// Auto-generate agent name.
+	agentName := generateSpawnName(project)
+	if taskID != "" {
+		// If we have a task, try to generate a better name from the task title.
+		taskBead, err := b.daemon.GetBead(ctx, taskID)
+		if err == nil && taskBead.Title != "" {
+			agentName = generateAgentName(taskBead.Title)
+		}
+	}
+
+	// Validate project exists.
+	if project != "" {
+		if !b.validateProject(ctx, cmd, project) {
+			return
+		}
+	}
+
+	b.spawnAndRespond(ctx, cmd, agentName, project, taskID, role, "")
+}
+
+// handleStartCommand processes the /start slash command.
+// Usage: /start <agent> [project|ticket|"PROMPT TEXT"] [task] [--role <role>]
+//
+//	/start "task description" [project] [--role <role>]
+//
+// This is the original /spawn behavior, preserved for power users who want to
+// specify an explicit agent name.
+func (b *Bot) handleStartCommand(ctx context.Context, cmd slack.SlashCommand) {
 	args := splitQuotedArgs(strings.TrimSpace(cmd.Text))
 	if len(args) == 0 {
 		_, _ = b.api.PostEphemeral(cmd.ChannelID, cmd.UserID,
-			slack.MsgOptionText(":x: Usage: `/spawn <agent> [project|ticket|\"PROMPT TEXT\"] [task] [--role <role>]`\nor: `/spawn \"task description\" [project] [--role <role>]`", false))
+			slack.MsgOptionText(":x: Usage: `/start <agent> [project|ticket|\"PROMPT TEXT\"] [task] [--role <role>]`\nor: `/start \"task description\" [project] [--role <role>]`", false))
 		return
 	}
 
@@ -118,6 +223,12 @@ func (b *Bot) handleSpawnCommand(ctx context.Context, cmd slack.SlashCommand) {
 		}
 	}
 
+	b.spawnAndRespond(ctx, cmd, agentName, project, taskID, role, customPrompt)
+}
+
+// spawnAndRespond creates an agent bead and sends a confirmation ephemeral message.
+// Extracted from the old handleSpawnCommand to share between /spawn and /start.
+func (b *Bot) spawnAndRespond(ctx context.Context, cmd slack.SlashCommand, agentName, project, taskID, role, customPrompt string) {
 	beadID, err := b.daemon.SpawnAgent(ctx, agentName, project, taskID, role, customPrompt)
 	if err != nil {
 		b.logger.Error("failed to spawn agent", "agent", agentName, "project", project, "task", taskID, "role", role, "prompt", customPrompt, "error", err)
@@ -150,7 +261,7 @@ func (b *Bot) handleSpawnCommand(ctx context.Context, cmd slack.SlashCommand) {
 		slack.MsgOptionText(text, false))
 }
 
-// handleTaskFirstSpawn handles /spawn "task description" [project] [--role <role>].
+// handleTaskFirstSpawn handles /start "task description" [project] [--role <role>].
 // It auto-generates an agent name from the task description, creates a task bead,
 // and spawns an agent assigned to that task.
 func (b *Bot) handleTaskFirstSpawn(ctx context.Context, cmd slack.SlashCommand, positional []string, role string) {
@@ -188,27 +299,7 @@ func (b *Bot) handleTaskFirstSpawn(ctx context.Context, cmd slack.SlashCommand, 
 		return
 	}
 
-	beadID, err := b.daemon.SpawnAgent(ctx, agentName, project, taskID, role, "")
-	if err != nil {
-		b.logger.Error("failed to spawn agent", "agent", agentName, "project", project, "task", taskID, "role", role, "error", err)
-		_, _ = b.api.PostEphemeral(cmd.ChannelID, cmd.UserID,
-			slack.MsgOptionText(fmt.Sprintf(":x: Failed to spawn agent %q: %s", agentName, err.Error()), false))
-		return
-	}
-
-	b.logger.Info("spawned agent via Slack (task-first)", "agent", agentName, "project", project, "task", taskID, "role", role, "bead", beadID, "user", cmd.UserID)
-
-	text := fmt.Sprintf(":rocket: Spawning agent *%s*", agentName)
-	if project != "" {
-		text += fmt.Sprintf(" in project *%s*", project)
-	}
-	if role != "" {
-		text += fmt.Sprintf(" with role *%s*", role)
-	}
-	text += fmt.Sprintf(" assigned to task `%s`", taskID)
-	text += fmt.Sprintf("\nBead: `%s` · Use `/roster` to check status.", beadID)
-	_, _ = b.api.PostEphemeral(cmd.ChannelID, cmd.UserID,
-		slack.MsgOptionText(text, false))
+	b.spawnAndRespond(ctx, cmd, agentName, project, taskID, role, "")
 }
 
 // validateProject checks whether a project name is known and sends an ephemeral
@@ -324,6 +415,33 @@ func projectFromLabels(labels []string) string {
 	for _, l := range labels {
 		if v, ok := strings.CutPrefix(l, "project:"); ok {
 			return v
+		}
+	}
+	return ""
+}
+
+// generateSpawnName creates a valid agent name for /spawn when no task is provided.
+// Uses the project name as a prefix with a random suffix for uniqueness.
+// Examples: "gasboat-k7x2", "monorepo-m3nq", "agent-a1b2" (no project).
+func generateSpawnName(project string) string {
+	prefix := project
+	if prefix == "" {
+		prefix = "agent"
+	}
+	return prefix + "-" + randomSuffix(4)
+}
+
+// projectFromChannel resolves a Slack channel ID to a project name by checking
+// the slack_channel field on project beads.
+func (b *Bot) projectFromChannel(ctx context.Context, channelID string) string {
+	projects, err := b.daemon.ListProjectBeads(ctx)
+	if err != nil {
+		b.logger.Error("failed to list projects for channel lookup", "error", err)
+		return ""
+	}
+	for name, info := range projects {
+		if info.SlackChannel == channelID {
+			return name
 		}
 	}
 	return ""
