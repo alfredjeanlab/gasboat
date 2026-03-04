@@ -155,10 +155,16 @@ func (a *Agents) handleUpdated(ctx context.Context, data []byte) {
 		}
 
 		// Track the current assignee for future unassignment detection.
+		// When the task is reassigned from one agent to another, also
+		// refresh the previous assignee's card to clear the stale task.
 		if bead.Assignee != "" {
 			a.mu.Lock()
+			prev := a.taskAssignees[bead.ID]
 			a.taskAssignees[bead.ID] = bead.Assignee
 			a.mu.Unlock()
+			if prev != "" && prev != bead.Assignee && a.notifier != nil {
+				a.notifier.NotifyAgentTaskUpdate(ctx, prev)
+			}
 		}
 		return
 	}

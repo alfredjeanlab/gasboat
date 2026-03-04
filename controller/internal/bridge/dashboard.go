@@ -194,6 +194,10 @@ func (d *Dashboard) renderBlocks(agents []beadsapi.AgentBead, decisions []*beads
 		switch {
 		case a.AgentState == "failed" || a.PodPhase == "failed":
 			dead = append(dead, a)
+		case a.AgentState == "done":
+			dead = append(dead, a)
+		case a.AgentState == "rate_limited":
+			dead = append(dead, a)
 		case a.AgentState == "working":
 			working = append(working, a)
 		case a.AgentState == "spawning":
@@ -223,7 +227,7 @@ func (d *Dashboard) renderBlocks(agents []beadsapi.AgentBead, decisions []*beads
 		slack.NewTextBlockObject("mrkdwn", headerText, false, false), nil, nil))
 
 	// Summary counters.
-	summaryText := fmt.Sprintf(":large_green_circle: %d working  ·  :white_circle: %d idle  ·  :red_circle: %d dead",
+	summaryText := fmt.Sprintf(":large_green_circle: %d working  ·  :white_circle: %d idle  ·  :octagonal_sign: %d stopped",
 		len(working), len(idle), len(dead))
 	if len(starting) > 0 {
 		summaryText += fmt.Sprintf("  ·  :hourglass_flowing_sand: %d starting", len(starting))
@@ -298,7 +302,7 @@ func (d *Dashboard) renderBlocks(agents []beadsapi.AgentBead, decisions []*beads
 	if len(dead) > 0 {
 		blocks = append(blocks, slack.NewDividerBlock())
 		blocks = append(blocks, slack.NewContextBlock("",
-			slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*Dead (%d)*", len(dead)), false, false)))
+			slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*Stopped (%d)*", len(dead)), false, false)))
 
 		shown := dead
 		if len(shown) > cfg.MaxDeadShown {
@@ -405,13 +409,22 @@ func dashboardAgentIdleBlock(a beadsapi.AgentBead, pendingCount int, coopmuxURL 
 
 func dashboardAgentDeadBlock(a beadsapi.AgentBead, coopmuxURL string) slack.Block {
 	displayName := coopmuxAgentLink(coopmuxURL, a.Metadata["pod_name"], a.AgentName)
-	line := fmt.Sprintf(":red_circle: *%s*", displayName)
-	if a.Project != "" {
-		line += fmt.Sprintf(" · %s", a.Project)
-	}
 	state := a.AgentState
 	if state == "" {
 		state = a.PodPhase
+	}
+	var emoji string
+	switch state {
+	case "done":
+		emoji = ":white_check_mark:"
+	case "rate_limited":
+		emoji = ":warning:"
+	default:
+		emoji = ":red_circle:"
+	}
+	line := fmt.Sprintf("%s *%s*", emoji, displayName)
+	if a.Project != "" {
+		line += fmt.Sprintf(" · %s", a.Project)
 	}
 	line += fmt.Sprintf(" · %s", state)
 	return slack.NewSectionBlock(
@@ -434,6 +447,10 @@ func buildDashboardHash(agents []beadsapi.AgentBead, decisions []*beadsapi.BeadD
 		switch {
 		case a.AgentState == "failed" || a.PodPhase == "failed":
 			state = "dead"
+		case a.AgentState == "done":
+			state = "done"
+		case a.AgentState == "rate_limited":
+			state = "rate_limited"
 		case a.AgentState == "working":
 			state = "working"
 		case a.AgentState == "spawning":

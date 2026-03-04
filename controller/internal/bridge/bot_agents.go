@@ -335,6 +335,11 @@ func (b *Bot) NotifyAgentTaskUpdate(_ context.Context, agentName string) {
 			candidates = append(candidates, agent)
 		}
 	}
+	// Refresh the last-seen timestamp so the card shows recent activity.
+	now := time.Now()
+	for _, agent := range candidates {
+		b.agentSeen[agent] = now
+	}
 	b.mu.Unlock()
 
 	for _, agent := range candidates {
