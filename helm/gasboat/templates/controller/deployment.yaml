@@ -193,6 +193,28 @@ spec:
             - name: CLAUDE_TEAMS_MAX_TEAMMATES
               value: {{ .Values.agents.claudeTeams.maxTeammates | quote }}
             {{- end }}
+            {{- with .Values.agents.claudeTeams.resources }}
+            {{- if .requests }}
+            {{- if .requests.cpu }}
+            - name: CLAUDE_TEAMS_CPU_REQUEST
+              value: {{ .requests.cpu | quote }}
+            {{- end }}
+            {{- if .requests.memory }}
+            - name: CLAUDE_TEAMS_MEMORY_REQUEST
+              value: {{ .requests.memory | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .limits }}
+            {{- if .limits.cpu }}
+            - name: CLAUDE_TEAMS_CPU_LIMIT
+              value: {{ .limits.cpu | quote }}
+            {{- end }}
+            {{- if .limits.memory }}
+            - name: CLAUDE_TEAMS_MEMORY_LIMIT
+              value: {{ .limits.memory | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- end }}
             {{- if .Values.agents.beadsE2EHTTPAddr }}
             - name: BEADS_E2E_HTTP_ADDR

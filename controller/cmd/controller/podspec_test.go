@@ -772,3 +772,95 @@ func TestApplyProjectDefaults_NoOverrides(t *testing.T) {
 		t.Error("expected resources to remain unchanged")
 	}
 }
+
+func TestApplyCommonConfig_TeamsResourceOverrides(t *testing.T) {
+	cfg := &config.Config{
+		ClaudeTeamsEnabled:       true,
+		ClaudeTeamsCPURequest:    "4",
+		ClaudeTeamsCPULimit:      "8",
+		ClaudeTeamsMemoryRequest: "24Gi",
+		ClaudeTeamsMemoryLimit:   "24Gi",
+		ProjectCache:             map[string]config.ProjectCacheEntry{},
+	}
+	spec := &podmanager.AgentPodSpec{
+		Project: "myproject",
+		Env:     map[string]string{},
+	}
+	defaults := podmanager.DefaultPodDefaults("crew")
+	podmanager.ApplyDefaults(spec, defaults)
+	applyCommonConfig(cfg, spec)
+
+	if spec.Resources == nil {
+		t.Fatal("expected Resources to be set")
+	}
+	cpuReq := spec.Resources.Requests[corev1.ResourceCPU]
+	if cpuReq.String() != "4" {
+		t.Errorf("expected cpu request 4, got %s", cpuReq.String())
+	}
+	cpuLim := spec.Resources.Limits[corev1.ResourceCPU]
+	if cpuLim.String() != "8" {
+		t.Errorf("expected cpu limit 8, got %s", cpuLim.String())
+	}
+	memReq := spec.Resources.Requests[corev1.ResourceMemory]
+	if memReq.String() != "24Gi" {
+		t.Errorf("expected memory request 24Gi, got %s", memReq.String())
+	}
+	memLim := spec.Resources.Limits[corev1.ResourceMemory]
+	if memLim.String() != "24Gi" {
+		t.Errorf("expected memory limit 24Gi, got %s", memLim.String())
+	}
+}
+
+func TestApplyCommonConfig_TeamsDisabled_NoResourceOverride(t *testing.T) {
+	cfg := &config.Config{
+		ClaudeTeamsEnabled:       false,
+		ClaudeTeamsCPURequest:    "4",
+		ClaudeTeamsMemoryRequest: "24Gi",
+		ProjectCache:             map[string]config.ProjectCacheEntry{},
+	}
+	spec := &podmanager.AgentPodSpec{
+		Project: "myproject",
+		Env:     map[string]string{},
+	}
+	defaults := podmanager.DefaultPodDefaults("crew")
+	podmanager.ApplyDefaults(spec, defaults)
+	applyCommonConfig(cfg, spec)
+
+	// Resources should remain at defaults when teams is disabled.
+	cpuReq := spec.Resources.Requests[corev1.ResourceCPU]
+	if cpuReq.String() != podmanager.DefaultCPURequest {
+		t.Errorf("expected default cpu request %s, got %s", podmanager.DefaultCPURequest, cpuReq.String())
+	}
+	memReq := spec.Resources.Requests[corev1.ResourceMemory]
+	if memReq.String() != podmanager.DefaultMemoryRequest {
+		t.Errorf("expected default memory request %s, got %s", podmanager.DefaultMemoryRequest, memReq.String())
+	}
+}
+
+func TestApplyCommonConfig_TeamsPartialResourceOverride(t *testing.T) {
+	cfg := &config.Config{
+		ClaudeTeamsEnabled:       true,
+		ClaudeTeamsMemoryRequest: "32Gi",
+		ClaudeTeamsMemoryLimit:   "32Gi",
+		// CPU fields empty — should keep defaults.
+		ProjectCache: map[string]config.ProjectCacheEntry{},
+	}
+	spec := &podmanager.AgentPodSpec{
+		Project: "myproject",
+		Env:     map[string]string{},
+	}
+	defaults := podmanager.DefaultPodDefaults("crew")
+	podmanager.ApplyDefaults(spec, defaults)
+	applyCommonConfig(cfg, spec)
+
+	// Memory should be overridden.
+	memReq := spec.Resources.Requests[corev1.ResourceMemory]
+	if memReq.String() != "32Gi" {
+		t.Errorf("expected memory request 32Gi, got %s", memReq.String())
+	}
+	// CPU should remain at default.
+	cpuReq := spec.Resources.Requests[corev1.ResourceCPU]
+	if cpuReq.String() != podmanager.DefaultCPURequest {
+		t.Errorf("expected default cpu request %s, got %s", podmanager.DefaultCPURequest, cpuReq.String())
+	}
+}

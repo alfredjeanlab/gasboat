@@ -370,6 +370,23 @@ func applyCommonConfig(cfg *config.Config, spec *podmanager.AgentPodSpec) {
 	// Claude Agent Teams: enable team lead → teammate coordination.
 	if cfg.ClaudeTeamsEnabled {
 		spec.Env["CLAUDE_TEAMS_ENABLED"] = "true"
+
+		// Apply teams-mode resource overrides. Each teammate runs its own
+		// Claude Code session (Node.js process + context window), so pods
+		// need more memory and CPU than single-session mode.
+		if cfg.ClaudeTeamsCPURequest != "" || cfg.ClaudeTeamsCPULimit != "" ||
+			cfg.ClaudeTeamsMemoryRequest != "" || cfg.ClaudeTeamsMemoryLimit != "" {
+			if spec.Resources == nil {
+				spec.Resources = &corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{},
+					Limits:   corev1.ResourceList{},
+				}
+			}
+			applyResourceOverride(spec.Resources.Requests, corev1.ResourceCPU, cfg.ClaudeTeamsCPURequest)
+			applyResourceOverride(spec.Resources.Limits, corev1.ResourceCPU, cfg.ClaudeTeamsCPULimit)
+			applyResourceOverride(spec.Resources.Requests, corev1.ResourceMemory, cfg.ClaudeTeamsMemoryRequest)
+			applyResourceOverride(spec.Resources.Limits, corev1.ResourceMemory, cfg.ClaudeTeamsMemoryLimit)
+		}
 	}
 	if cfg.ClaudeTeammateMode != "" {
 		spec.Env["CLAUDE_TEAMMATE_MODE"] = cfg.ClaudeTeammateMode

@@ -95,6 +95,15 @@ type Config struct {
 	// (env: CLAUDE_TEAMS_MAX_TEAMMATES). 0 means use Claude Code's built-in default.
 	ClaudeTeamsMaxTeammates int
 
+	// ClaudeTeams resource overrides: when teams mode is enabled, agent pods
+	// need more memory and CPU because each teammate runs its own Claude Code
+	// session (Node.js process + context window). These override the default
+	// agent pod resources only when ClaudeTeamsEnabled is true.
+	ClaudeTeamsCPURequest    string // env: CLAUDE_TEAMS_CPU_REQUEST
+	ClaudeTeamsCPULimit      string // env: CLAUDE_TEAMS_CPU_LIMIT
+	ClaudeTeamsMemoryRequest string // env: CLAUDE_TEAMS_MEMORY_REQUEST
+	ClaudeTeamsMemoryLimit   string // env: CLAUDE_TEAMS_MEMORY_LIMIT
+
 	// --- Secrets & Credentials ---
 
 	// ClaudeOAuthSecret is the K8s secret containing Claude OAuth credentials (env: CLAUDE_OAUTH_SECRET).
@@ -261,7 +270,11 @@ func Parse() *Config {
 		ClaudeModel:             os.Getenv("CLAUDE_MODEL"),
 		ClaudeTeamsEnabled:      envBoolOr("CLAUDE_TEAMS_ENABLED", false),
 		ClaudeTeammateMode:      envOr("CLAUDE_TEAMMATE_MODE", "tmux"),
-		ClaudeTeamsMaxTeammates: envIntOr("CLAUDE_TEAMS_MAX_TEAMMATES", 0),
+		ClaudeTeamsMaxTeammates:  envIntOr("CLAUDE_TEAMS_MAX_TEAMMATES", 0),
+		ClaudeTeamsCPURequest:    os.Getenv("CLAUDE_TEAMS_CPU_REQUEST"),
+		ClaudeTeamsCPULimit:      os.Getenv("CLAUDE_TEAMS_CPU_LIMIT"),
+		ClaudeTeamsMemoryRequest: os.Getenv("CLAUDE_TEAMS_MEMORY_REQUEST"),
+		ClaudeTeamsMemoryLimit:   os.Getenv("CLAUDE_TEAMS_MEMORY_LIMIT"),
 
 		// Secrets & Credentials
 		ClaudeOAuthSecret:      os.Getenv("CLAUDE_OAUTH_SECRET"),

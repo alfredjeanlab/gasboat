@@ -139,6 +139,17 @@ agents:
     # Passed as CLAUDE_TEAMS_MAX_TEAMMATES. When 0 or omitted, Claude Code
     # uses its built-in default.
     maxTeammates: 0
+    # Resource overrides for agent pods when teams mode is active.
+    # Each teammate runs its own Claude Code session (Node.js process + context
+    # window), so pods need more memory and CPU than single-session mode.
+    # Empty values fall back to the default agent pod resources.
+    resources:
+      requests:
+        cpu: "4"
+        memory: "24Gi"
+      limits:
+        cpu: "8"
+        memory: "24Gi"
 
   # Beads HTTP address for the e2e-isolated namespace. When set, agent pods
   # get BEADS_E2E_HTTP_ADDR so e2e tests create spawn events in an isolated
