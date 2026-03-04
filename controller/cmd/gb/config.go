@@ -19,14 +19,10 @@ var configCmd = &cobra.Command{
 	GroupID: "session",
 }
 
-// configNamespaces returns the known config bead namespaces to dump.
-// Delegates to the config registry (config_registry.go).
-func configNamespaces() []string {
-	return ConfigCategoryNames()
-}
-
 // --- Serialization types ---
 
+// configEntry represents a legacy KV config entry (deprecated).
+// Retained for backward-compatible parsing of old dump files.
 type configEntry struct {
 	Key   string          `json:"key"`
 	Value json.RawMessage `json:"value"`
@@ -55,39 +51,11 @@ type configDump struct {
 
 // --- Interfaces for testability ---
 
-type configDumper interface {
-	ListConfigs(ctx context.Context, namespace string) ([]beadsapi.ConfigEntry, error)
-}
-
 type beadLister interface {
 	ListBeadsFiltered(ctx context.Context, q beadsapi.ListBeadsQuery) (*beadsapi.ListBeadsResult, error)
 }
 
-type configLoader interface {
-	SetConfig(ctx context.Context, key string, value []byte) error
-}
-
 // --- Core logic ---
-
-func dumpConfigs(ctx context.Context, client configDumper, namespaces []string) ([]configEntry, error) {
-	var entries []configEntry
-	for _, ns := range namespaces {
-		configs, err := client.ListConfigs(ctx, ns)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[config] warning: failed to list %s: %v\n", ns, err)
-			continue
-		}
-		for _, c := range configs {
-			entries = append(entries, configEntry{Key: c.Key, Value: c.Value})
-		}
-	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Key < entries[j].Key
-	})
-
-	return entries, nil
-}
 
 func dumpAdvice(ctx context.Context, client beadLister) ([]adviceEntry, error) {
 	result, err := client.ListBeadsFiltered(ctx, beadsapi.ListBeadsQuery{
@@ -114,19 +82,6 @@ func dumpAdvice(ctx context.Context, client beadLister) ([]adviceEntry, error) {
 	})
 
 	return entries, nil
-}
-
-func loadConfigs(ctx context.Context, client configLoader, entries []configEntry) (restored int, errors int) {
-	for _, e := range entries {
-		if err := client.SetConfig(ctx, e.Key, e.Value); err != nil {
-			fmt.Fprintf(os.Stderr, "[config] warning: failed to set %s: %v\n", e.Key, err)
-			errors++
-			continue
-		}
-		fmt.Fprintf(os.Stderr, "[config] restored %s\n", e.Key)
-		restored++
-	}
-	return restored, errors
 }
 
 // configBeadCreator is the interface for creating config beads during load.
@@ -219,14 +174,13 @@ func loadConfigBeads(ctx context.Context, client configBeadCreator, entries []co
 
 var configDumpCmd = &cobra.Command{
 	Use:   "dump",
-	Short: "Dump all configs and advice as JSON (pipe to file for backup)",
-	Long: `Fetches config entries from all known namespaces, config beads,
-and advice beads, then prints them as a JSON object. The output is
-suitable for saving to a file and restoring with 'gb config load'.
+	Short: "Dump config beads and advice as JSON (pipe to file for backup)",
+	Long: `Fetches config beads and advice beads, then prints them as a JSON
+object. The output is suitable for saving to a file and restoring
+with 'gb config load'.
 
 Sections:
-  configs      — legacy KV config entries (settings, hooks, MCP, types, views)
-  config_beads — label-based config beads (new unified format)
+  config_beads — label-based config beads
   advice       — advice beads (rules and guidance for agents)
 
 Example:
@@ -234,11 +188,6 @@ Example:
   gb config dump | jq .config_beads`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-
-		configs, err := dumpConfigs(ctx, daemon, configNamespaces())
-		if err != nil {
-			return err
-		}
 
 		configBeads, err := dumpConfigBeads(ctx, daemon)
 		if err != nil {
@@ -251,7 +200,6 @@ Example:
 		}
 
 		dump := configDump{
-			Configs:     configs,
 			ConfigBeads: configBeads,
 			Advice:      advice,
 		}
@@ -262,8 +210,8 @@ Example:
 		}
 
 		fmt.Fprintln(os.Stdout, string(data))
-		fmt.Fprintf(os.Stderr, "[config] dumped %d KV configs, %d config beads, %d advice\n",
-			len(configs), len(configBeads), len(advice))
+		fmt.Fprintf(os.Stderr, "[config] dumped %d config beads, %d advice\n",
+			len(configBeads), len(advice))
 		return nil
 	},
 }
@@ -304,10 +252,9 @@ Example:
 			}
 		}
 
-		// Restore KV config entries.
+		// Skip legacy KV config entries with a warning.
 		if len(dump.Configs) > 0 {
-			restored, _ := loadConfigs(ctx, daemon, dump.Configs)
-			fmt.Fprintf(os.Stderr, "[config] loaded %d KV config entries\n", restored)
+			fmt.Fprintf(os.Stderr, "[config] skipping %d legacy KV config entries (deprecated — use config beads instead)\n", len(dump.Configs))
 		}
 
 		// Restore config beads.

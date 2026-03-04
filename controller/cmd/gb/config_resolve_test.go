@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"testing"
 
 	"gasboat/controller/internal/beadsapi"
@@ -21,21 +19,6 @@ func (m *mockConfigBeadLister) ListBeadsFiltered(_ context.Context, q beadsapi.L
 		return nil, m.err
 	}
 	return &beadsapi.ListBeadsResult{Beads: m.beads, Total: len(m.beads)}, nil
-}
-
-type mockConfigKVReader struct {
-	configs map[string]*beadsapi.ConfigEntry
-	err     error
-}
-
-func (m *mockConfigKVReader) GetConfig(_ context.Context, key string) (*beadsapi.ConfigEntry, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	if entry, ok := m.configs[key]; ok {
-		return entry, nil
-	}
-	return nil, fmt.Errorf("not found: %s", key)
 }
 
 // --- ResolveConfigBeads tests ---
@@ -263,97 +246,3 @@ func TestResolveConfigBeads_SpecificityOrder(t *testing.T) {
 	}
 }
 
-// --- ResolveConfigWithFallback tests ---
-
-func TestResolveConfigWithFallback_BeadsFirst(t *testing.T) {
-	lister := &mockConfigBeadLister{
-		beads: []*beadsapi.BeadDetail{
-			{
-				Title:       "claude-settings",
-				Labels:      []string{"global"},
-				Description: `{"model":"opus-from-beads"}`,
-			},
-		},
-	}
-	kvReader := &mockConfigKVReader{
-		configs: map[string]*beadsapi.ConfigEntry{
-			"claude-settings:global": {Key: "claude-settings:global", Value: json.RawMessage(`{"model":"sonnet-from-kv"}`)},
-		},
-	}
-
-	merged, source := ResolveConfigWithFallback(
-		context.Background(), lister, kvReader,
-		"claude-settings", "captain", []string{"global", "role:captain"},
-	)
-
-	if source != "beads" {
-		t.Errorf("expected source=beads, got %s", source)
-	}
-	if merged["model"] != "opus-from-beads" {
-		t.Errorf("expected model from beads, got %v", merged["model"])
-	}
-}
-
-func TestResolveConfigWithFallback_KVFallback(t *testing.T) {
-	lister := &mockConfigBeadLister{beads: []*beadsapi.BeadDetail{}}
-	kvReader := &mockConfigKVReader{
-		configs: map[string]*beadsapi.ConfigEntry{
-			"claude-settings:global":  {Key: "claude-settings:global", Value: json.RawMessage(`{"model":"sonnet"}`)},
-			"claude-settings:captain": {Key: "claude-settings:captain", Value: json.RawMessage(`{"model":"opus"}`)},
-		},
-	}
-
-	merged, source := ResolveConfigWithFallback(
-		context.Background(), lister, kvReader,
-		"claude-settings", "captain", []string{"global", "role:captain"},
-	)
-
-	if source != "kv" {
-		t.Errorf("expected source=kv, got %s", source)
-	}
-	if merged["model"] != "opus" {
-		t.Errorf("expected model=opus (role override via KV), got %v", merged["model"])
-	}
-}
-
-func TestResolveConfigWithFallback_NothingFound(t *testing.T) {
-	lister := &mockConfigBeadLister{beads: []*beadsapi.BeadDetail{}}
-	kvReader := &mockConfigKVReader{configs: map[string]*beadsapi.ConfigEntry{}}
-
-	merged, source := ResolveConfigWithFallback(
-		context.Background(), lister, kvReader,
-		"claude-settings", "captain", []string{"global", "role:captain"},
-	)
-
-	if source != "" {
-		t.Errorf("expected empty source, got %s", source)
-	}
-	if merged != nil {
-		t.Errorf("expected nil merged, got %v", merged)
-	}
-}
-
-func TestResolveConfigWithFallback_KVGlobalOnly(t *testing.T) {
-	lister := &mockConfigBeadLister{beads: []*beadsapi.BeadDetail{}}
-	kvReader := &mockConfigKVReader{
-		configs: map[string]*beadsapi.ConfigEntry{
-			"claude-hooks:global": {Key: "claude-hooks:global", Value: json.RawMessage(`{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"gb hook stop-gate"}]}]}}`)},
-		},
-	}
-
-	merged, source := ResolveConfigWithFallback(
-		context.Background(), lister, kvReader,
-		"claude-hooks", "", []string{"global"},
-	)
-
-	if source != "kv" {
-		t.Errorf("expected source=kv, got %s", source)
-	}
-	hooks, ok := merged["hooks"].(map[string]any)
-	if !ok {
-		t.Fatal("expected hooks key")
-	}
-	if hooks["Stop"] == nil {
-		t.Error("expected Stop hooks")
-	}
-}

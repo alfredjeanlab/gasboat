@@ -15,6 +15,9 @@ type ConfigEntry struct {
 }
 
 // GetConfig fetches a config entry by key.
+//
+// Deprecated: KV config is superseded by label-based config beads.
+// Use ListBeadsFiltered with type="config" instead.
 func (c *Client) GetConfig(ctx context.Context, key string) (*ConfigEntry, error) {
 	var entry ConfigEntry
 	if err := c.doJSON(ctx, http.MethodGet, "/v1/configs/"+url.PathEscape(key), nil, &entry); err != nil {
@@ -24,6 +27,9 @@ func (c *Client) GetConfig(ctx context.Context, key string) (*ConfigEntry, error
 }
 
 // ListConfigs returns all config entries in the given namespace.
+//
+// Deprecated: KV config is superseded by label-based config beads.
+// Use ListBeadsFiltered with type="config" instead.
 func (c *Client) ListConfigs(ctx context.Context, namespace string) ([]ConfigEntry, error) {
 	q := url.Values{}
 	if namespace != "" {
@@ -44,6 +50,9 @@ func (c *Client) ListConfigs(ctx context.Context, namespace string) ([]ConfigEnt
 }
 
 // DeleteConfig removes a config entry by key.
+//
+// Deprecated: KV config is superseded by label-based config beads.
+// Use ListBeadsFiltered with type="config" instead.
 func (c *Client) DeleteConfig(ctx context.Context, key string) error {
 	if err := c.doJSON(ctx, http.MethodDelete, "/v1/configs/"+url.PathEscape(key), nil, nil); err != nil {
 		return fmt.Errorf("deleting config %s: %w", key, err)

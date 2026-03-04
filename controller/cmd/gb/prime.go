@@ -93,7 +93,7 @@ func resolvePrimeAgentIdentity(cmd *cobra.Command) string {
 }
 
 // outputWorkflowContext fetches workflow context from config beads (claude-instructions
-// category), falling back to KV config, then to hardcoded defaults.
+// category), falling back to hardcoded defaults.
 func outputWorkflowContext(w io.Writer, role string) {
 	ctx := context.Background()
 
@@ -109,14 +109,7 @@ func outputWorkflowContext(w io.Writer, role string) {
 		return
 	}
 
-	// Fallback: try KV store.
-	merged, source := ResolveConfigWithFallback(ctx, daemon, daemon, "claude-instructions", role, subs)
-	if source != "" {
-		outputConfigSections(w, merged)
-		return
-	}
-
-	// Final fallback: hardcoded defaults.
+	// Fallback: hardcoded defaults.
 	outputWorkflowContextHardcoded(w, role)
 }
 

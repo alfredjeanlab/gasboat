@@ -431,6 +431,9 @@ func (c *Client) CloseBead(ctx context.Context, beadID string, fields map[string
 }
 
 // SetConfig upserts a config key/value in the daemon.
+//
+// Deprecated: KV config is superseded by label-based config beads.
+// Use CreateBead with type="config" instead.
 func (c *Client) SetConfig(ctx context.Context, key string, value []byte) error {
 	body := map[string]json.RawMessage{
 		"value": value,

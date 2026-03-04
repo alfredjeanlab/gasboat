@@ -530,7 +530,7 @@ func runSetupClaude(ctx context.Context, workspace, role string) error {
 	subs := buildSubscriptions(role)
 
 	// ── User-level settings (claude-settings) ───────────────────────────
-	settings, _ := ResolveConfigWithFallback(ctx, daemon, daemon, "claude-settings", role, subs)
+	settings, _ := ResolveConfigBeads(ctx, daemon, "claude-settings", subs)
 	if settings != nil {
 		if err := writeUserSettings(settings); err != nil {
 			fmt.Fprintf(os.Stderr, "[setup] warning: failed to write user settings: %v\n", err)
@@ -542,7 +542,7 @@ func runSetupClaude(ctx context.Context, workspace, role string) error {
 	}
 
 	// ── Project-level MCP config (claude-mcp) ───────────────────────────
-	mcpConfig, _ := ResolveConfigWithFallback(ctx, daemon, daemon, "claude-mcp", role, subs)
+	mcpConfig, _ := ResolveConfigBeads(ctx, daemon, "claude-mcp", subs)
 	if mcpConfig != nil {
 		if err := writeMCPConfig(workspace, mcpConfig); err != nil {
 			fmt.Fprintf(os.Stderr, "[setup] warning: failed to write MCP config: %v\n", err)
@@ -550,7 +550,7 @@ func runSetupClaude(ctx context.Context, workspace, role string) error {
 	}
 
 	// ── Workspace-level hooks (claude-hooks) ────────────────────────────
-	hooks, _ := ResolveConfigWithFallback(ctx, daemon, daemon, "claude-hooks", role, subs)
+	hooks, _ := ResolveConfigBeads(ctx, daemon, "claude-hooks", subs)
 	if hooks == nil {
 		return fmt.Errorf("no claude-hooks config found")
 	}
@@ -576,7 +576,7 @@ func runSetupClaude(ctx context.Context, workspace, role string) error {
 	fmt.Fprintf(os.Stderr, "[setup] wrote %s\n", outPath)
 
 	// ── Agent instructions (claude-instructions) ────────────────────────
-	instructions, _ := ResolveConfigWithFallback(ctx, daemon, daemon, "claude-instructions", role, subs)
+	instructions, _ := ResolveConfigBeads(ctx, daemon, "claude-instructions", subs)
 	if instructions != nil {
 		writeInstructionFiles(workspace, instructions)
 	}
