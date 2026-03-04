@@ -581,6 +581,11 @@ func runSetupClaude(ctx context.Context, workspace, role string) error {
 		writeInstructionFiles(workspace, instructions)
 	}
 
+	// ── Claude extensions (agents, skills, commands) ─────────────────────
+	// Symlink .claude/agents, skills, commands from the project repo into
+	// the workspace so Claude discovers custom extensions at session init.
+	symlinkClaudeExtensions(workspace)
+
 	return nil
 }
 

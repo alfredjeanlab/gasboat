@@ -95,10 +95,6 @@ func runAgentStartK8s(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Symlink .claude/agents, .claude/skills, .claude/commands from the
-	// project repo into the workspace so Claude discovers custom extensions.
-	symlinkClaudeExtensions(workspace)
-
 	writeClaudeMD(cfg)
 	writeOnboardingSkip()
 
