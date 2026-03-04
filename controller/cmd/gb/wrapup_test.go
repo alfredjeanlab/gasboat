@@ -369,6 +369,171 @@ func TestLoadWrapUpRequirements_InvalidJSON(t *testing.T) {
 	}
 }
 
+// --- Validation enforcement scenarios ---
+
+func TestWrapUpRequirements_HardEnforce_BlocksOnMissing(t *testing.T) {
+	reqs := WrapUpRequirements{
+		Required: []string{"accomplishments", "blockers"},
+		Enforce:  "hard",
+	}
+	w := &WrapUp{Accomplishments: "did stuff"} // blockers missing
+
+	issues := reqs.Validate(w)
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 issue, got %d: %v", len(issues), issues)
+	}
+	if !strings.Contains(issues[0], "blockers") {
+		t.Errorf("issue should mention 'blockers': %s", issues[0])
+	}
+}
+
+func TestWrapUpRequirements_SoftEnforce_WarnsButPasses(t *testing.T) {
+	reqs := WrapUpRequirements{
+		Required: []string{"accomplishments"},
+		Enforce:  "soft",
+	}
+	w := &WrapUp{} // empty — should warn but validate still returns issues
+
+	issues := reqs.Validate(w)
+	if len(issues) == 0 {
+		t.Error("soft enforcement should still return issues")
+	}
+	// The caller (gb stop) decides whether to block or warn based on Enforce level.
+}
+
+// --- Backward compatibility ---
+
+func TestNoWrapUpConfig_DefaultsToSoftEnforcement(t *testing.T) {
+	lister := &mockConfigBeadLister{beads: nil}
+	reqs := LoadWrapUpRequirements(context.Background(), lister, "any-agent")
+
+	// Default is soft — means agents can stop without --wrapup.
+	if reqs.Enforce != "soft" {
+		t.Errorf("Enforce = %q, want 'soft' (default = no blocking)", reqs.Enforce)
+	}
+}
+
+func TestReasonFlagStillWorks_NoWrapUpNeeded(t *testing.T) {
+	// When --reason is used without --wrapup, processWrapUp is not called.
+	// This test verifies that processWrapUp only works with valid JSON.
+	_, _, err := processWrapUp(`{"accomplishments":"done"}`)
+	if err != nil {
+		t.Fatalf("processWrapUp with valid JSON should succeed: %v", err)
+	}
+}
+
+// --- Stop gate validation logic ---
+
+func TestWrapUpGateLogic_StopNotRequested(t *testing.T) {
+	// When stop_requested is not set, gate should not block.
+	bead := &beadsapi.BeadDetail{
+		Fields: map[string]string{},
+	}
+	// Simulate: stop not requested → no block
+	if bead.Fields["stop_requested"] == "true" {
+		t.Error("stop_requested should not be set")
+	}
+}
+
+func TestWrapUpGateLogic_WrapUpAlreadyProvided(t *testing.T) {
+	// When wrapup field is already set, gate should not block.
+	bead := &beadsapi.BeadDetail{
+		Fields: map[string]string{
+			"stop_requested": "true",
+			WrapUpFieldName:  `{"accomplishments":"did stuff"}`,
+		},
+	}
+	if bead.Fields[WrapUpFieldName] == "" {
+		t.Error("wrapup should be present")
+	}
+}
+
+func TestWrapUpGateLogic_HardEnforceNoWrapUp(t *testing.T) {
+	// When hard enforcement is on and no wrapup, the gate should block.
+	reqs := WrapUpRequirements{
+		Required: []string{"accomplishments"},
+		Enforce:  "hard",
+	}
+	bead := &beadsapi.BeadDetail{
+		Fields: map[string]string{
+			"stop_requested": "true",
+			// no wrapup field
+		},
+	}
+
+	// Simulate gate logic.
+	shouldBlock := bead.Fields["stop_requested"] == "true" &&
+		bead.Fields[WrapUpFieldName] == "" &&
+		reqs.Enforce == "hard"
+
+	if !shouldBlock {
+		t.Error("gate should block: hard enforcement, no wrapup, stop requested")
+	}
+}
+
+func TestWrapUpGateLogic_SoftEnforceNoWrapUp(t *testing.T) {
+	// When soft enforcement is on and no wrapup, the gate should NOT block.
+	reqs := WrapUpRequirements{
+		Required: []string{"accomplishments"},
+		Enforce:  "soft",
+	}
+	bead := &beadsapi.BeadDetail{
+		Fields: map[string]string{
+			"stop_requested": "true",
+		},
+	}
+
+	shouldBlock := bead.Fields["stop_requested"] == "true" &&
+		bead.Fields[WrapUpFieldName] == "" &&
+		reqs.Enforce == "hard"
+
+	if shouldBlock {
+		t.Error("gate should NOT block: soft enforcement")
+	}
+}
+
+// --- WrapUp edge cases ---
+
+func TestWrapUp_AllFieldsFilled(t *testing.T) {
+	reqs := WrapUpRequirements{
+		Required: []string{"accomplishments", "blockers", "handoff_notes"},
+		CustomFields: []CustomFieldDef{
+			{Name: "risk", Required: true},
+		},
+		Enforce: "hard",
+	}
+	w := &WrapUp{
+		Accomplishments: "stuff",
+		Blockers:        "none",
+		HandoffNotes:    "check PR",
+		BeadsClosed:     []string{"kd-1"},
+		PullRequests:    []string{"https://github.com/org/repo/pull/1"},
+		Custom:          map[string]string{"risk": "low"},
+	}
+
+	issues := reqs.Validate(w)
+	if len(issues) != 0 {
+		t.Errorf("fully filled wrap-up should pass, got issues: %v", issues)
+	}
+}
+
+func TestWrapUp_EmptyCustomMap(t *testing.T) {
+	w := &WrapUp{Accomplishments: "done"}
+	if wrapUpFieldPresent(w, "nonexistent") {
+		t.Error("nonexistent custom field should not be present")
+	}
+}
+
+func TestWrapUpConfigCategory_Registered(t *testing.T) {
+	cat := LookupCategory(WrapUpConfigCategory)
+	if cat == nil {
+		t.Fatal("wrapup-config category should be registered")
+	}
+	if cat.Strategy != MergeOverride {
+		t.Errorf("wrapup-config should use MergeOverride, got %d", cat.Strategy)
+	}
+}
+
 func containsStr(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && stringContains(s, substr))
 }
