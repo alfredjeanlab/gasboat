@@ -161,7 +161,7 @@ var gateSatisfiedByCmd = &cobra.Command{
 		}
 
 		method := bead.Fields["gate_satisfied_by"]
-		if method == "yield" || method == "operator" {
+		if method == "yield" || method == "operator" || method == "ready" {
 			fmt.Println(method)
 			return nil
 		}

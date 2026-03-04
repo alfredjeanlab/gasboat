@@ -8,6 +8,25 @@
 
 set -uo pipefail
 
+# ── Cooldown debouncing ──────────────────────────────────────────────────
+# If we already blocked within the cooldown window, exit 2 silently
+# (no text injection). This prevents the loop where every blocked stop
+# injects the full checkpoint text, the model processes it (API cost),
+# generates a response, and Claude Code immediately tries to stop again.
+COOLDOWN_FILE="/tmp/stop-gate-last-block"
+COOLDOWN_SECS="${STOP_GATE_COOLDOWN_SECS:-30}"
+
+if [ -f "$COOLDOWN_FILE" ]; then
+    last_block=$(cat "$COOLDOWN_FILE" 2>/dev/null || echo 0)
+    now=$(date +%s)
+    elapsed=$(( now - last_block ))
+    if [ "$elapsed" -lt "$COOLDOWN_SECS" ]; then
+        # Still within cooldown — block silently without re-injecting text.
+        exit 2
+    fi
+fi
+
+# ── Rate-limit escape hatch ─────────────────────────────────────────────
 # If the agent is rate-limited, allow the stop unconditionally.
 # This prevents the infinite loop: rate limit -> try to stop -> gate blocks ->
 # try to create decision -> rate limit again.
@@ -16,6 +35,7 @@ _error_cat=$(echo "$_agent_state" | jq -r '.error_category // empty' 2>/dev/null
 if [ "${_error_cat}" = "rate_limited" ]; then
     echo "[stop-gate] Agent is rate-limited, allowing stop without checkpoint" >&2
     gb gate clear decision 2>/dev/null || true
+    rm -f "$COOLDOWN_FILE"
     exit 0
 fi
 
@@ -23,19 +43,13 @@ fi
 # stderr flows through so Claude Code sees the block reason.
 _stdin=$(cat)
 
-# If the agent is rate-limited, it cannot create a decision checkpoint.
-# Allow the stop immediately to avoid an infinite block loop.
-_agent_state=$(curl -sf http://localhost:8080/api/v1/agent 2>/dev/null)
-_error_cat=$(echo "$_agent_state" | jq -r '.error_category // empty')
-if [ "$_error_cat" = "rate_limited" ]; then
-    echo '[stop-gate] Rate limited — allowing stop without checkpoint'
-    exit 0
-fi
-
 echo "$_stdin" | gb bus emit --hook=Stop
 _rc=$?
 
 if [ $_rc -eq 2 ]; then
+    # Record block time for cooldown debouncing.
+    date +%s > "$COOLDOWN_FILE"
+
     # Gate blocked — inject checkpoint instructions into the conversation via stdout.
     # Prefer config-bead-materialized file; fall back to hardcoded text.
     STOP_GATE_TEXT="/home/agent/.claude/stop-gate-text.md"
@@ -85,8 +99,9 @@ CHECKPOINT
     exit 2
 fi
 
-# Gate verified by the server (gb bus emit already confirmed gate_satisfied_by
-# was "yield", "operator", or "manual-force" before allowing the stop).
+# Gate allowed — clear cooldown file and gate state.
+rm -f "$COOLDOWN_FILE"
+
 # Clear any remaining gate state so the next session must re-satisfy from scratch.
 gb gate clear decision 2>/dev/null || true
 

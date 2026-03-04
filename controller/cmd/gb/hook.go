@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,10 +89,34 @@ var hookPrimeCmd = &cobra.Command{
 
 // ── gb hook stop-gate ─────────────────────────────────────────────────────
 
+// stopGateCooldownFile tracks when the last stop-gate block occurred.
+// Used for debouncing to prevent repeated text injections.
+// Variable (not const) so tests can override it.
+var stopGateCooldownFile = "/tmp/stop-gate-last-block"
+
+// stopGateDefaultCooldownSecs is the default cooldown between stop-gate text
+// injections. Overridden by STOP_GATE_COOLDOWN_SECS env var.
+const stopGateDefaultCooldownSecs = 30
+
 var hookStopGateCmd = &cobra.Command{
 	Use:   "stop-gate",
 	Short: "Emit Stop hook event and handle gate block (replaces stop-gate.sh)",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// ── Cooldown debouncing ──────────────────────────────────────
+		// If we blocked recently, exit 2 silently without re-injecting
+		// the checkpoint text. This prevents the cost-multiplying loop.
+		if stopGateInCooldown() {
+			os.Exit(2)
+		}
+
+		// ── Rate-limit escape hatch ─────────────────────────────────
+		// If the agent is rate-limited, allow the stop unconditionally.
+		if isAgentRateLimited() {
+			fmt.Fprintf(os.Stderr, "[stop-gate] Agent is rate-limited, allowing stop without checkpoint\n")
+			clearStopGateCooldown()
+			os.Exit(0)
+		}
+
 		var stdinEvent map[string]any
 		if err := json.NewDecoder(os.Stdin).Decode(&stdinEvent); err != nil {
 			stdinEvent = map[string]any{}
@@ -129,6 +154,8 @@ var hookStopGateCmd = &cobra.Command{
 		}
 
 		if resp.Block {
+			recordStopGateBlock()
+			injectStopGateText()
 			blockJSON, _ := json.Marshal(map[string]string{
 				"decision": "block",
 				"reason":   resp.Reason,
@@ -140,6 +167,7 @@ var hookStopGateCmd = &cobra.Command{
 		// Check wrap-up completeness if agent has stop_requested=true.
 		if agentBeadID != "" {
 			if blocked, reason := checkWrapUpGate(cmd.Context(), agentBeadID); blocked {
+				recordStopGateBlock()
 				blockJSON, _ := json.Marshal(map[string]string{
 					"decision": "block",
 					"reason":   reason,
@@ -149,6 +177,8 @@ var hookStopGateCmd = &cobra.Command{
 			}
 		}
 
+		// Gate allowed — clear cooldown.
+		clearStopGateCooldown()
 		return nil
 	},
 }
@@ -269,4 +299,83 @@ func outputClaimReminder(ctx context.Context, agentName string) {
 	}
 
 	fmt.Printf("<system-reminder>\nNo claimed work found. Run `gb ready` to see available beads, then `kd claim <id>` to claim one before starting work.\n</system-reminder>\n")
+}
+
+// ── Stop-gate debouncing helpers ─────────────────────────────────────────
+
+// stopGateInCooldown returns true if the stop-gate blocked within the
+// cooldown window and the text should NOT be re-injected.
+func stopGateInCooldown() bool {
+	data, err := os.ReadFile(stopGateCooldownFile)
+	if err != nil {
+		return false
+	}
+	var lastBlock int64
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &lastBlock); err != nil {
+		return false
+	}
+	cooldown := stopGateDefaultCooldownSecs
+	if envVal := os.Getenv("STOP_GATE_COOLDOWN_SECS"); envVal != "" {
+		if _, err := fmt.Sscanf(envVal, "%d", &cooldown); err != nil {
+			cooldown = stopGateDefaultCooldownSecs
+		}
+	}
+	return time.Now().Unix()-lastBlock < int64(cooldown)
+}
+
+// recordStopGateBlock writes the current timestamp to the cooldown file.
+func recordStopGateBlock() {
+	_ = os.WriteFile(stopGateCooldownFile, []byte(fmt.Sprintf("%d\n", time.Now().Unix())), 0o644)
+}
+
+// clearStopGateCooldown removes the cooldown file (e.g., when gate is allowed).
+func clearStopGateCooldown() {
+	_ = os.Remove(stopGateCooldownFile)
+}
+
+// isAgentRateLimited checks the local coop API to see if the agent is rate-limited.
+func isAgentRateLimited() bool {
+	coopURL := os.Getenv("COOP_URL")
+	if coopURL == "" {
+		coopURL = "http://localhost:8080"
+	}
+	agentURL := strings.TrimRight(coopURL, "/") + "/api/v1/agent"
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(agentURL)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	var state map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+		return false
+	}
+	cat, _ := state["error_category"].(string)
+	return cat == "rate_limited"
+}
+
+// injectStopGateText outputs the stop-gate checkpoint text to stdout.
+// Prefers the config-bead-materialized file; falls back to a hardcoded default.
+func injectStopGateText() {
+	stopGateTextFile := filepath.Join(os.Getenv("HOME"), ".claude", "stop-gate-text.md")
+	if data, err := os.ReadFile(stopGateTextFile); err == nil {
+		fmt.Print(string(data))
+		return
+	}
+	// Hardcoded fallback.
+	fmt.Print(`<system-reminder>
+STOP BLOCKED — decision gate unsatisfied.
+
+Create a decision checkpoint before stopping:
+
+` + "```bash" + `
+gb decision create --no-wait \
+  --prompt="Did X. Blocked on Y. Recommending option A because..." \
+  --options='[{"id":"continue","short":"Continue","label":"Continue work","artifact_type":"report"}]'
+gb yield
+` + "```" + `
+</system-reminder>
+`)
 }
