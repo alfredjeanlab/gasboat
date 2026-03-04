@@ -108,6 +108,50 @@ func setupPVC(cfg k8sConfig) error {
 	return nil
 }
 
+// symlinkClaudeExtensions symlinks .claude/agents, .claude/skills, and
+// .claude/commands from the project repo checkout into the agent workspace.
+// This makes custom Claude Code agents, skills, and commands discoverable
+// when the agent workspace is separate from the project repo (K8s layout).
+func symlinkClaudeExtensions(workspace string) {
+	project := os.Getenv("BOAT_PROJECT")
+	if project == "" {
+		return
+	}
+
+	// Project repo is cloned by init-clone to /home/agent/bot/{project}/work.
+	projectWork := filepath.Join("/home/agent/bot", project, "work")
+	if _, err := os.Stat(projectWork); os.IsNotExist(err) {
+		return
+	}
+
+	claudeDir := filepath.Join(workspace, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		fmt.Printf("[gb agent start] warning: create .claude dir: %v\n", err)
+		return
+	}
+
+	for _, sub := range []string{"agents", "skills", "commands"} {
+		src := filepath.Join(projectWork, ".claude", sub)
+		dst := filepath.Join(claudeDir, sub)
+
+		// Source must exist in the project repo.
+		if _, err := os.Stat(src); os.IsNotExist(err) {
+			continue
+		}
+
+		// Skip if destination already exists (file, dir, or symlink).
+		if _, err := os.Lstat(dst); err == nil {
+			continue
+		}
+
+		if err := os.Symlink(src, dst); err != nil {
+			fmt.Printf("[gb agent start] warning: symlink %s -> %s: %v\n", dst, src, err)
+		} else {
+			fmt.Printf("[gb agent start] linked %s -> %s\n", dst, src)
+		}
+	}
+}
+
 // roleBlurb returns a role-specific identity description for CLAUDE.md.
 func roleBlurb(role, projectLine string) string {
 	switch role {
