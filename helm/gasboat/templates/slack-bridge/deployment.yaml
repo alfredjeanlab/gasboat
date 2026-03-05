@@ -142,6 +142,10 @@ spec:
             - name: CONTROLLER_URL
               value: "http://{{ include "gasboat.agents.fullname" . }}:8091"
             {{- end }}
+            {{- if and .Values.coopmux.enabled .Values.coopmux.ingress.host }}
+            - name: COOPMUX_PUBLIC_URL
+              value: "https://{{ .Values.coopmux.ingress.host }}/mux"
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
