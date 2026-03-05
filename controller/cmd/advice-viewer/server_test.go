@@ -227,7 +227,7 @@ func TestHandleAdviceCreate(t *testing.T) {
 	form := url.Values{
 		"title":       {"New Advice"},
 		"description": {"Some advice"},
-		"rig":         {"gasboat"},
+		"project":     {"gasboat"},
 		"role":        {"crew"},
 	}
 	req := httptest.NewRequest("POST", "/advice/new", strings.NewReader(form.Encode()))

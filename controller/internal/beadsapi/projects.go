@@ -69,7 +69,7 @@ func (c *Client) ListProjectBeads(ctx context.Context) (map[string]ProjectInfo, 
 		return nil, fmt.Errorf("listing project beads: %w", err)
 	}
 
-	rigs := make(map[string]ProjectInfo)
+	projects := make(map[string]ProjectInfo)
 	for _, b := range resp.Beads {
 		// Strip "Project: " prefix from title -- legacy project beads may have titles
 		// like "Project: beads" instead of just "beads".
@@ -122,11 +122,11 @@ func (c *Client) ListProjectBeads(ctx context.Context) (map[string]ProjectInfo, 
 			}
 		}
 		if name != "" {
-			rigs[name] = info
+			projects[name] = info
 		}
 	}
 
-	return rigs, nil
+	return projects, nil
 }
 
 // parseSlackChannels splits a comma-separated channel ID string into a slice.

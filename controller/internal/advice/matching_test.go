@@ -28,11 +28,20 @@ func TestMatchesSubscriptions_RoleMismatch(t *testing.T) {
 	}
 }
 
-func TestMatchesSubscriptions_RigRequired(t *testing.T) {
-	labels := []string{"rig:gasboat", "role:crew"}
-	subs := []string{"global", "rig:other", "role:crew"}
+func TestMatchesSubscriptions_ProjectRequired(t *testing.T) {
+	labels := []string{"project:gasboat", "role:crew"}
+	subs := []string{"global", "project:other", "role:crew"}
 	if MatchesSubscriptions(labels, subs) {
-		t.Error("advice with rig:gasboat should not match agent with rig:other")
+		t.Error("advice with project:gasboat should not match agent with project:other")
+	}
+}
+
+func TestMatchesSubscriptions_RigBackwardCompat(t *testing.T) {
+	// Old rig: labels should still match agents with project: subscriptions
+	labels := []string{"rig:gasboat", "role:crew"}
+	subs := []string{"global", "project:gasboat", "role:crew"}
+	if !MatchesSubscriptions(labels, subs) {
+		t.Error("advice with rig:gasboat should match agent with project:gasboat (backward compat)")
 	}
 }
 
@@ -53,17 +62,17 @@ func TestMatchesSubscriptions_AgentMismatch(t *testing.T) {
 }
 
 func TestMatchesSubscriptions_ANDGroup(t *testing.T) {
-	// g0:role:crew AND g0:rig:gasboat -- both must match
-	labels := []string{"g0:role:crew", "g0:rig:gasboat"}
-	subs := []string{"global", "role:crew", "rig:gasboat"}
+	// g0:role:crew AND g0:project:gasboat -- both must match
+	labels := []string{"g0:role:crew", "g0:project:gasboat"}
+	subs := []string{"global", "role:crew", "project:gasboat"}
 	if !MatchesSubscriptions(labels, subs) {
 		t.Error("AND group should match when all labels in group match")
 	}
 }
 
 func TestMatchesSubscriptions_ANDGroupPartial(t *testing.T) {
-	labels := []string{"g0:role:crew", "g0:rig:gasboat"}
-	subs := []string{"global", "role:crew", "rig:other"}
+	labels := []string{"g0:role:crew", "g0:project:gasboat"}
+	subs := []string{"global", "role:crew", "project:other"}
 	if MatchesSubscriptions(labels, subs) {
 		t.Error("AND group should not match when only some labels match")
 	}
@@ -79,7 +88,7 @@ func TestMatchesSubscriptions_ORGroups(t *testing.T) {
 }
 
 func TestParseGroups_Grouped(t *testing.T) {
-	labels := []string{"g0:role:crew", "g0:rig:gasboat", "g1:role:lead"}
+	labels := []string{"g0:role:crew", "g0:project:gasboat", "g1:role:lead"}
 	groups := ParseGroups(labels)
 
 	if len(groups[0]) != 2 {
@@ -125,15 +134,22 @@ func TestCategorizeScope_Agent(t *testing.T) {
 	}
 }
 
-func TestCategorizeScope_Rig(t *testing.T) {
+func TestCategorizeScope_Project(t *testing.T) {
+	scope, target := CategorizeScope([]string{"project:gasboat"})
+	if scope != "project" || target != "gasboat" {
+		t.Errorf("expected project/gasboat, got %s/%s", scope, target)
+	}
+}
+
+func TestCategorizeScope_RigBackwardCompat(t *testing.T) {
 	scope, target := CategorizeScope([]string{"rig:gasboat"})
-	if scope != "rig" || target != "gasboat" {
-		t.Errorf("expected rig/gasboat, got %s/%s", scope, target)
+	if scope != "project" || target != "gasboat" {
+		t.Errorf("expected project/gasboat from rig: label, got %s/%s", scope, target)
 	}
 }
 
 func TestCategorizeScope_GroupPrefix(t *testing.T) {
-	scope, target := CategorizeScope([]string{"g0:role:crew", "g0:rig:gasboat"})
+	scope, target := CategorizeScope([]string{"g0:role:crew", "g0:project:gasboat"})
 	if scope != "role" || target != "crew" {
 		t.Errorf("expected role/crew, got %s/%s", scope, target)
 	}
@@ -143,11 +159,12 @@ func TestBuildAgentSubscriptions(t *testing.T) {
 	subs := BuildAgentSubscriptions("gasboat/crews/bot", nil)
 
 	expected := map[string]bool{
-		"global":               true,
+		"global":                  true,
 		"agent:gasboat/crews/bot": true,
-		"rig:gasboat":          true,
-		"role:crews":           true,
-		"role:crew":            true,
+		"project:gasboat":        true,
+		"rig:gasboat":            true, // backward compat
+		"role:crews":             true,
+		"role:crew":              true,
 	}
 	for _, s := range subs {
 		delete(expected, s)
@@ -158,7 +175,7 @@ func TestBuildAgentSubscriptions(t *testing.T) {
 }
 
 func TestBuildAgentSubscriptions_SimpleID(t *testing.T) {
-	subs := BuildAgentSubscriptions("myrig", nil)
+	subs := BuildAgentSubscriptions("myproject", nil)
 
 	has := make(map[string]bool)
 	for _, s := range subs {
@@ -167,8 +184,11 @@ func TestBuildAgentSubscriptions_SimpleID(t *testing.T) {
 	if !has["global"] {
 		t.Error("should include global")
 	}
-	if !has["rig:myrig"] {
-		t.Error("should include rig:myrig")
+	if !has["project:myproject"] {
+		t.Error("should include project:myproject")
+	}
+	if !has["rig:myproject"] {
+		t.Error("should include rig:myproject (backward compat)")
 	}
 }
 
@@ -188,7 +208,7 @@ func TestStripGroupPrefix(t *testing.T) {
 		input, want string
 	}{
 		{"g0:role:crew", "role:crew"},
-		{"g12:rig:gasboat", "rig:gasboat"},
+		{"g12:project:gasboat", "project:gasboat"},
 		{"global", "global"},
 		{"role:crew", "role:crew"},
 		{"g:bad", "g:bad"}, // g without number
@@ -224,7 +244,8 @@ func TestHasTargetingLabel(t *testing.T) {
 		want   bool
 	}{
 		{[]string{"global"}, true},
-		{[]string{"rig:gasboat"}, true},
+		{[]string{"project:gasboat"}, true},
+		{[]string{"rig:gasboat"}, true}, // backward compat
 		{[]string{"role:crew"}, true},
 		{[]string{"agent:bot"}, true},
 		{[]string{"g0:role:crew"}, true},
@@ -240,8 +261,8 @@ func TestHasTargetingLabel(t *testing.T) {
 }
 
 func TestFindMatchedLabels(t *testing.T) {
-	labels := []string{"g0:role:crew", "g0:rig:gasboat", "global"}
-	subs := []string{"global", "role:crew", "rig:gasboat"}
+	labels := []string{"g0:role:crew", "g0:project:gasboat", "global"}
+	subs := []string{"global", "role:crew", "project:gasboat"}
 
 	matched := FindMatchedLabels(labels, subs)
 	if len(matched) != 3 {
@@ -254,7 +275,7 @@ func TestBuildScopeHeader(t *testing.T) {
 		scope, target, want string
 	}{
 		{"global", "", "Global"},
-		{"rig", "gasboat", "Rig: gasboat"},
+		{"project", "gasboat", "Project: gasboat"},
 		{"role", "crew", "Role: crew"},
 		{"agent", "gasboat/crews/bot", "Agent: gasboat/crews/bot"},
 	}
@@ -267,15 +288,15 @@ func TestBuildScopeHeader(t *testing.T) {
 }
 
 func TestGroupSortKey(t *testing.T) {
-	// Global should sort before rig, rig before role, role before agent
+	// Global should sort before project, project before role, role before agent
 	keys := []string{
 		GroupSortKey("agent", "bot"),
 		GroupSortKey("global", ""),
 		GroupSortKey("role", "crew"),
-		GroupSortKey("rig", "gasboat"),
+		GroupSortKey("project", "gasboat"),
 	}
 	if keys[1] >= keys[3] || keys[3] >= keys[2] || keys[2] >= keys[0] {
-		t.Errorf("sort order wrong: global=%s rig=%s role=%s agent=%s",
+		t.Errorf("sort order wrong: global=%s project=%s role=%s agent=%s",
 			keys[1], keys[3], keys[2], keys[0])
 	}
 }

@@ -645,11 +645,10 @@ func buildSubscriptions(role string) []string {
 	if role != "" {
 		subs = append(subs, "role:"+role)
 	}
-	if rig := os.Getenv("BOAT_RIG"); rig != "" {
-		subs = append(subs, "rig:"+rig)
-	}
 	if project := os.Getenv("BOAT_PROJECT"); project != "" {
 		subs = append(subs, "project:"+project)
+	} else if rig := os.Getenv("BOAT_RIG"); rig != "" {
+		subs = append(subs, "project:"+rig) // BOAT_RIG is deprecated, use BOAT_PROJECT
 	}
 	return subs
 }

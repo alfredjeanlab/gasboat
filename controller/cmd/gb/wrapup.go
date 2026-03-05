@@ -24,7 +24,7 @@ package main
 //
 // The WrapUpRequirements struct defines which fields are required vs
 // optional, and can specify custom fields. Advice beads with category
-// "wrapup" can override these defaults per role/rig/agent scope. The
+// "wrapup" can override these defaults per role/project/agent scope. The
 // requirements are injected into agent context via gb prime so agents
 // know what's expected before they reach gb stop.
 //
@@ -82,7 +82,7 @@ type WrapUp struct {
 
 // WrapUpRequirements defines what a wrap-up must contain. Loaded from
 // advice beads with category "wrapup" and merged by scope precedence
-// (global < rig < role < agent). See prime_advice.go for injection.
+// (global < project < role < agent). See prime_advice.go for injection.
 type WrapUpRequirements struct {
 	// Required lists field names that must be non-empty in the wrap-up.
 	// Default: ["accomplishments"]
@@ -297,7 +297,7 @@ func outputWrapUpExpectations(w io.Writer, agentID string) {
 
 // WrapUpConfigCategory is the config bead category for wrap-up requirements.
 // Config beads with this title are resolved using the standard layered merge
-// system (global < rig < role < agent), allowing different roles to have
+// system (global < project < role < agent), allowing different roles to have
 // different wrap-up expectations.
 const WrapUpConfigCategory = "wrapup-config"
 

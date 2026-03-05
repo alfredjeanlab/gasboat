@@ -220,13 +220,13 @@ func TestResolveConfigBeads_SpecificityOrder(t *testing.T) {
 			},
 			{
 				Title:       "claude-settings",
-				Labels:      []string{"rig:gasboat"},
-				Description: `{"model":"haiku","rig":"gasboat"}`,
+				Labels:      []string{"project:gasboat"},
+				Description: `{"model":"haiku","project":"gasboat"}`,
 			},
 		},
 	}
 
-	subs := []string{"global", "rig:gasboat", "role:captain"}
+	subs := []string{"global", "project:gasboat", "role:captain"}
 	merged, count := ResolveConfigBeads(context.Background(), lister, "claude-settings", subs)
 
 	if count != 3 {
@@ -240,9 +240,9 @@ func TestResolveConfigBeads_SpecificityOrder(t *testing.T) {
 	if merged["extra"] != "yes" {
 		t.Error("expected extra=yes from global layer")
 	}
-	// rig's "rig" should survive (not overridden by role).
-	if merged["rig"] != "gasboat" {
-		t.Error("expected rig=gasboat from rig layer")
+	// project's "project" should survive (not overridden by role).
+	if merged["project"] != "gasboat" {
+		t.Error("expected project=gasboat from project layer")
 	}
 }
 

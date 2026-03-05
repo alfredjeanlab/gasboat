@@ -13,8 +13,8 @@ import (
 )
 
 // BuildAgentSubscriptions creates auto-subscription labels for an agent.
-// Always includes "global" and "agent:<agentID>", plus rig/role labels
-// parsed from the agent ID (format: rig/role_plural/name).
+// Always includes "global" and "agent:<agentID>", plus project/role labels
+// parsed from the agent ID (format: project/role_plural/name).
 func BuildAgentSubscriptions(agentID string, extra []string) []string {
 	subs := make([]string, 0, len(extra)+4)
 	subs = append(subs, extra...)
@@ -23,7 +23,8 @@ func BuildAgentSubscriptions(agentID string, extra []string) []string {
 
 	parts := strings.Split(agentID, "/")
 	if len(parts) >= 1 && parts[0] != "" {
-		subs = append(subs, "rig:"+parts[0])
+		subs = append(subs, "project:"+parts[0])
+		subs = append(subs, "rig:"+parts[0]) // deprecated, keep for backward compat
 	}
 	if len(parts) >= 2 {
 		rolePlural := parts[1]
@@ -53,9 +54,9 @@ func EnrichAgentSubscriptions(ctx context.Context, daemon *beadsapi.Client, agen
 		}
 	}
 
-	// Derive role: and rig: subscriptions from the agent bead's own labels.
+	// Derive role:, project:, and rig: subscriptions from the agent bead's own labels.
 	for _, label := range agentBead.Labels {
-		if strings.HasPrefix(label, "role:") || strings.HasPrefix(label, "rig:") {
+		if strings.HasPrefix(label, "role:") || strings.HasPrefix(label, "project:") || strings.HasPrefix(label, "rig:") {
 			subs = append(subs, label)
 		}
 	}
@@ -88,11 +89,22 @@ func MatchesSubscriptions(adviceLabels, subscriptions []string) bool {
 		subSet[s] = true
 	}
 
-	// Check required labels: rig:X and agent:X must be in subscriptions.
+	// Check required labels: project:/rig:X and agent:X must be in subscriptions.
 	for _, l := range adviceLabels {
 		clean := StripGroupPrefix(l)
+		if strings.HasPrefix(clean, "project:") && !subSet[clean] {
+			// Also accept deprecated rig: equivalent
+			rigEquiv := "rig:" + strings.TrimPrefix(clean, "project:")
+			if !subSet[rigEquiv] {
+				return false
+			}
+		}
 		if strings.HasPrefix(clean, "rig:") && !subSet[clean] {
-			return false
+			// Also accept project: equivalent
+			projEquiv := "project:" + strings.TrimPrefix(clean, "rig:")
+			if !subSet[projEquiv] {
+				return false
+			}
 		}
 		if strings.HasPrefix(clean, "agent:") && !subSet[clean] {
 			return false
@@ -140,7 +152,7 @@ func FindMatchedLabels(adviceLabels, subscriptions []string) []string {
 }
 
 // CategorizeScope determines the targeting scope from advice labels.
-// Returns scope (global/rig/role/agent) and the target value.
+// Returns scope (global/project/role/agent) and the target value.
 func CategorizeScope(labels []string) (scope, target string) {
 	for _, l := range labels {
 		clean := StripGroupPrefix(l)
@@ -149,8 +161,10 @@ func CategorizeScope(labels []string) (scope, target string) {
 			return "agent", strings.TrimPrefix(clean, "agent:")
 		case strings.HasPrefix(clean, "role:"):
 			scope, target = "role", strings.TrimPrefix(clean, "role:")
-		case strings.HasPrefix(clean, "rig:") && scope != "role":
-			scope, target = "rig", strings.TrimPrefix(clean, "rig:")
+		case strings.HasPrefix(clean, "project:") && scope != "role":
+			scope, target = "project", strings.TrimPrefix(clean, "project:")
+		case strings.HasPrefix(clean, "rig:") && scope != "role" && scope != "project":
+			scope, target = "project", strings.TrimPrefix(clean, "rig:") // rig: treated as project:
 		case clean == "global" && scope == "":
 			scope, target = "global", ""
 		}
@@ -166,8 +180,8 @@ func BuildScopeHeader(scope, target string) string {
 	switch scope {
 	case "global":
 		return "Global"
-	case "rig":
-		return "Rig: " + target
+	case "project":
+		return "Project: " + target
 	case "role":
 		return "Role: " + target
 	case "agent":
@@ -182,7 +196,7 @@ func GroupSortKey(scope, target string) string {
 	switch scope {
 	case "global":
 		return "0:" + target
-	case "rig":
+	case "project":
 		return "1:" + target
 	case "role":
 		return "2:" + target
@@ -235,12 +249,14 @@ func ParseGroups(labels []string) map[int][]string {
 }
 
 // HasTargetingLabel checks whether any label is a targeting label
-// (global, rig:, role:, agent:).
+// (global, project:, rig:, role:, agent:).
 func HasTargetingLabel(labels []string) bool {
 	for _, l := range labels {
 		l = StripGroupPrefix(l)
 		switch {
 		case l == "global":
+			return true
+		case strings.HasPrefix(l, "project:"):
 			return true
 		case strings.HasPrefix(l, "rig:"):
 			return true

@@ -61,7 +61,7 @@ func TestE2E_AdviceViewer(t *testing.T) {
 		form := url.Values{
 			"title":       {"E2E Test Advice"},
 			"description": {"Created by e2e test"},
-			"rig":         {"e2e-test"},
+			"project":     {"e2e-test"},
 		}
 		req := httptest.NewRequest("POST", "/advice/new", strings.NewReader(form.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -93,7 +93,7 @@ func TestE2E_AdviceViewer(t *testing.T) {
 		editForm := url.Values{
 			"title":       {"E2E Test Advice Updated"},
 			"description": {"Updated by e2e test"},
-			"labels":      {"rig:e2e-test"},
+			"labels":      {"project:e2e-test"},
 		}
 		req = httptest.NewRequest("POST", "/advice/"+beadID+"/edit", strings.NewReader(editForm.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")

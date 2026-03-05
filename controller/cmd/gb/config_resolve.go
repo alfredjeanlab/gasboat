@@ -75,7 +75,7 @@ func ResolveConfigBeads(ctx context.Context, lister configBeadLister, category s
 		return nil, 0
 	}
 
-	// Sort by specificity: global (0:) < rig (1:) < role (2:) < agent (3:).
+	// Sort by specificity: global (0:) < project (1:) < role (2:) < agent (3:).
 	sort.Slice(matched, func(i, j int) bool {
 		return matched[i].specificity < matched[j].specificity
 	})

@@ -278,7 +278,8 @@ func (s *Server) handleAdviceCreate(w http.ResponseWriter, r *http.Request) {
 	labelsStr := r.FormValue("labels")
 	hookCommand := r.FormValue("hook_command")
 	hookTrigger := r.FormValue("hook_trigger")
-	rig := r.FormValue("rig")
+	project := r.FormValue("project")
+	rig := r.FormValue("rig") // deprecated, accept for backward compat
 	role := r.FormValue("role")
 	agent := r.FormValue("agent")
 
@@ -286,8 +287,10 @@ func (s *Server) handleAdviceCreate(w http.ResponseWriter, r *http.Request) {
 
 	// Add targeting labels.
 	var targeting []string
-	if rig != "" {
-		targeting = append(targeting, "rig:"+rig)
+	if project != "" {
+		targeting = append(targeting, "project:"+project)
+	} else if rig != "" {
+		targeting = append(targeting, "project:"+rig)
 	}
 	if role != "" {
 		targeting = append(targeting, "role:"+role)

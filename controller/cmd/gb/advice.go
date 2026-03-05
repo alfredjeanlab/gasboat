@@ -34,16 +34,19 @@ var adviceAddCmd = &cobra.Command{
 		priority, _ := cmd.Flags().GetInt("priority")
 		labels, _ := cmd.Flags().GetStringSlice("label")
 
+		project, _ := cmd.Flags().GetString("project")
 		rig, _ := cmd.Flags().GetString("rig")
 		role, _ := cmd.Flags().GetString("role")
 		agent, _ := cmd.Flags().GetString("agent")
 
 		// Collect shorthand targeting labels, then AND-group them by default.
-		// Multiple targeting labels (e.g. --role=cleanup --rig=gasboat) mean
+		// Multiple targeting labels (e.g. --role=cleanup --project=gasboat) mean
 		// "match agents that satisfy ALL of these", not any one of them.
 		var targeting []string
-		if rig != "" {
-			targeting = append(targeting, "rig:"+rig)
+		if project != "" {
+			targeting = append(targeting, "project:"+project)
+		} else if rig != "" {
+			targeting = append(targeting, "project:"+rig) // --rig is deprecated alias for --project
 		}
 		if role != "" {
 			targeting = append(targeting, "role:"+role)
@@ -232,9 +235,11 @@ func init() {
 	adviceAddCmd.Flags().StringP("description", "d", "", "detailed description")
 	adviceAddCmd.Flags().IntP("priority", "p", 2, "priority (0-4)")
 	adviceAddCmd.Flags().StringSliceP("label", "l", nil, "labels (repeatable)")
-	adviceAddCmd.Flags().String("rig", "", "shorthand for --label rig:<value>")
+	adviceAddCmd.Flags().String("project", "", "shorthand for --label project:<value>")
+	adviceAddCmd.Flags().String("rig", "", "deprecated: use --project instead")
 	adviceAddCmd.Flags().String("role", "", "shorthand for --label role:<value>")
 	adviceAddCmd.Flags().String("agent", "", "shorthand for --label agent:<value>")
+	adviceAddCmd.Flags().Lookup("rig").Hidden = true
 	adviceAddCmd.Flags().String("hook-command", "", "shell command to execute")
 	adviceAddCmd.Flags().String("hook-trigger", "", "when to run")
 
