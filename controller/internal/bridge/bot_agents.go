@@ -215,8 +215,19 @@ func (b *Bot) NotifyAgentSpawn(ctx context.Context, bead BeadEvent) {
 	// Thread-bound agents: post a brief status message in the thread
 	// instead of a top-level agent card.
 	if slackChannel, slackTS := b.resolveAgentThread(ctx, agent); slackChannel != "" && slackTS != "" {
+		name := extractAgentName(agent)
+		b.mu.Lock()
+		podName := b.agentPodName[agent]
+		b.mu.Unlock()
+		displayName := coopmuxAgentLink(b.coopmuxPublicURL, podName, name)
 		_, _, err := b.api.PostMessageContext(ctx, slackChannel,
-			slack.MsgOptionText(fmt.Sprintf("Agent %s is starting...", agent), false),
+			slack.MsgOptionText(fmt.Sprintf("Agent %s is starting...", name), false),
+			slack.MsgOptionBlocks(
+				slack.NewSectionBlock(
+					slack.NewTextBlockObject("mrkdwn",
+						fmt.Sprintf(":rocket: Agent %s is starting...", displayName), false, false),
+					nil, nil),
+			),
 			slack.MsgOptionTS(slackTS),
 		)
 		if err != nil {
