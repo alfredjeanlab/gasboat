@@ -70,6 +70,10 @@ type Bot struct {
 	agentSeen    map[string]time.Time  // agent identity → last activity timestamp
 	agentPodName map[string]string     // agent identity → pod hostname (coopmux session ID)
 	agentImageTag map[string]string   // agent identity → deployed image tag
+
+	// Nudge throttling for thread reply forwarding.
+	// Key: "agent:thread_ts", value: last nudge time.
+	lastThreadNudge map[string]time.Time
 }
 
 // BotConfig holds configuration for the Socket Mode bot.
@@ -130,7 +134,8 @@ func NewBot(cfg BotConfig) *Bot {
 		agentState:       make(map[string]string),
 		agentSeen:        make(map[string]time.Time),
 		agentPodName:     make(map[string]string),
-		agentImageTag:   make(map[string]string),
+		agentImageTag:    make(map[string]string),
+		lastThreadNudge: make(map[string]time.Time),
 		github:           gh,
 		repos:            cfg.Repos,
 		version:          cfg.Version,
@@ -286,9 +291,18 @@ func (b *Bot) handleMessageEvent(ctx context.Context, ev *slackevents.MessageEve
 		return
 	}
 
-	// Thread reply to a decision message.
+	// Thread reply handling.
 	if ev.ThreadTimeStamp != "" && ev.ThreadTimeStamp != ev.TimeStamp {
+		// Decision thread replies (resolve the decision).
 		b.handleThreadReply(ctx, ev)
+
+		// Forward to bound agent if this thread belongs to one.
+		// Skip messages containing @mention — those are handled by app_mention event.
+		if !strings.Contains(ev.Text, fmt.Sprintf("<@%s>", b.botUserID)) {
+			if agent := b.getAgentByThread(ev.Channel, ev.ThreadTimeStamp); agent != "" {
+				b.handleThreadForward(ctx, ev, agent)
+			}
+		}
 		return
 	}
 
