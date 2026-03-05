@@ -94,9 +94,19 @@ var hookPrimeCmd = &cobra.Command{
 // Variable (not const) so tests can override it.
 var stopGateCooldownFile = "/tmp/stop-gate-last-block"
 
-// stopGateDefaultCooldownSecs is the default cooldown between stop-gate text
-// injections. Overridden by STOP_GATE_COOLDOWN_SECS env var.
+// stopGateBlockCountFile tracks how many times the stop-gate has blocked
+// in the current session. Used for exponential backoff.
+var stopGateBlockCountFile = "/tmp/stop-gate-block-count"
+
+// stopGateDefaultCooldownSecs is the base cooldown between stop-gate text
+// injections. Doubles with each consecutive block (exponential backoff).
+// Overridden by STOP_GATE_COOLDOWN_SECS env var.
 const stopGateDefaultCooldownSecs = 30
+
+// stopGateMaxBlocks is the number of consecutive blocks before the stop-gate
+// allows the stop as an escape hatch. This prevents infinite cost-sink loops
+// where the agent repeatedly creates decisions + yields without making progress.
+const stopGateMaxBlocks = 5
 
 var hookStopGateCmd = &cobra.Command{
 	Use:   "stop-gate",
@@ -104,9 +114,20 @@ var hookStopGateCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// ── Cooldown debouncing ──────────────────────────────────────
 		// If we blocked recently, exit 2 silently without re-injecting
-		// the checkpoint text. This prevents the cost-multiplying loop.
+		// the checkpoint text. Uses exponential backoff to limit cost.
 		if stopGateInCooldown() {
 			os.Exit(2)
+		}
+
+		// ── Escape hatch ─────────────────────────────────────────────
+		// After too many consecutive blocks, allow the stop to prevent
+		// infinite cost-sink loops (decision → yield → block → repeat).
+		if stopGateEscapeHatch() {
+			fmt.Fprintf(os.Stderr, "[stop-gate] Escape hatch: %d consecutive blocks, allowing stop\n", readStopGateBlockCount())
+			fmt.Print("<system-reminder>Stop gate escape hatch activated after repeated blocks. " +
+				"If you have unfinished work, call `gb done` explicitly next time.</system-reminder>\n")
+			clearStopGateCooldown()
+			os.Exit(0)
 		}
 
 		// ── Rate-limit escape hatch ─────────────────────────────────
@@ -154,8 +175,17 @@ var hookStopGateCmd = &cobra.Command{
 		}
 
 		if resp.Block {
+			blockCount := readStopGateBlockCount() + 1
 			recordStopGateBlock()
 			injectStopGateText()
+			// After yield, inject stronger guidance to continue working.
+			if blockCount > 1 {
+				fmt.Print("<system-reminder>You have been blocked " +
+					fmt.Sprintf("%d time(s). ", blockCount) +
+					"After `gb yield` returns, CONTINUE WORKING on the decision outcome. " +
+					"Only call `gb done` when all work is truly complete. " +
+					"Do NOT create another decision unless you have new blocking questions.</system-reminder>\n")
+			}
 			blockJSON, _ := json.Marshal(map[string]string{
 				"decision": "block",
 				"reason":   resp.Reason,
@@ -305,6 +335,7 @@ func outputClaimReminder(ctx context.Context, agentName string) {
 
 // stopGateInCooldown returns true if the stop-gate blocked within the
 // cooldown window and the text should NOT be re-injected.
+// Uses exponential backoff: base * 2^(blockCount-1), capped at 5 minutes.
 func stopGateInCooldown() bool {
 	data, err := os.ReadFile(stopGateCooldownFile)
 	if err != nil {
@@ -314,23 +345,57 @@ func stopGateInCooldown() bool {
 	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &lastBlock); err != nil {
 		return false
 	}
-	cooldown := stopGateDefaultCooldownSecs
+	baseCooldown := stopGateDefaultCooldownSecs
 	if envVal := os.Getenv("STOP_GATE_COOLDOWN_SECS"); envVal != "" {
-		if _, err := fmt.Sscanf(envVal, "%d", &cooldown); err != nil {
-			cooldown = stopGateDefaultCooldownSecs
+		if _, err := fmt.Sscanf(envVal, "%d", &baseCooldown); err != nil {
+			baseCooldown = stopGateDefaultCooldownSecs
 		}
 	}
+
+	// Exponential backoff: base * 2^(blockCount-1), capped at 300s (5 min).
+	blockCount := readStopGateBlockCount()
+	cooldown := baseCooldown
+	for i := 1; i < blockCount; i++ {
+		cooldown *= 2
+		if cooldown > 300 {
+			cooldown = 300
+			break
+		}
+	}
+
 	return time.Now().Unix()-lastBlock < int64(cooldown)
 }
 
-// recordStopGateBlock writes the current timestamp to the cooldown file.
-func recordStopGateBlock() {
-	_ = os.WriteFile(stopGateCooldownFile, []byte(fmt.Sprintf("%d\n", time.Now().Unix())), 0o644)
+// stopGateEscapeHatch returns true if the block count has exceeded the
+// maximum, allowing the stop as a safety valve against infinite cost loops.
+func stopGateEscapeHatch() bool {
+	return readStopGateBlockCount() >= stopGateMaxBlocks
 }
 
-// clearStopGateCooldown removes the cooldown file (e.g., when gate is allowed).
+// recordStopGateBlock writes the current timestamp and increments the block counter.
+func recordStopGateBlock() {
+	_ = os.WriteFile(stopGateCooldownFile, []byte(fmt.Sprintf("%d\n", time.Now().Unix())), 0o644)
+	count := readStopGateBlockCount() + 1
+	_ = os.WriteFile(stopGateBlockCountFile, []byte(fmt.Sprintf("%d\n", count)), 0o644)
+}
+
+// clearStopGateCooldown removes the cooldown and block count files.
 func clearStopGateCooldown() {
 	_ = os.Remove(stopGateCooldownFile)
+	_ = os.Remove(stopGateBlockCountFile)
+}
+
+// readStopGateBlockCount returns the current session block count.
+func readStopGateBlockCount() int {
+	data, err := os.ReadFile(stopGateBlockCountFile)
+	if err != nil {
+		return 0
+	}
+	var count int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &count); err != nil {
+		return 0
+	}
+	return count
 }
 
 // isAgentRateLimited checks the local coop API to see if the agent is rate-limited.
@@ -368,13 +433,22 @@ func injectStopGateText() {
 	fmt.Print(`<system-reminder>
 STOP BLOCKED — decision gate unsatisfied.
 
-Create a decision checkpoint before stopping:
+You CANNOT stop without either creating a decision checkpoint OR calling ` + "`gb done`" + `.
 
+## If work is DONE
+` + "```bash" + `
+kd close <bead-id>        # close completed beads
+gb done                   # despawn cleanly (bypasses gate)
+` + "```" + `
+
+## If BLOCKED and need human input
 ` + "```bash" + `
 gb decision create --no-wait \
   --prompt="Did X. Blocked on Y. Recommending option A because..." \
   --options='[{"id":"continue","short":"Continue","label":"Continue work","artifact_type":"report"}]'
-gb yield
+gb yield                  # blocks until human responds
+# IMPORTANT: after yield returns, CONTINUE WORKING on the decision outcome.
+# Do NOT stop or create another decision. Act on the response.
 ` + "```" + `
 </system-reminder>
 `)

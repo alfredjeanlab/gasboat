@@ -922,37 +922,57 @@ tasks:
       GITHUB_USER: ${{ secrets.GITHUB_USER }}
 
   # ═══════════════════════════════════════════════════════════════════════
-  # Re-tag external images at gasboat calver — one tag for everything.
-  # Coopmux is NOT re-tagged here — coop is tagged with the gasboat calver
+  # Build sister-project images at gasboat calver.
+  # Coopmux is NOT built here — coop is tagged with the gasboat calver
   # directly, so ghcr.io/groblegark/coop:<calver> is pushed by coop's own CI.
   # ═══════════════════════════════════════════════════════════════════════
 
-  # ── Re-tag kbeads → gasboat calver ───────────────────────────────────
-  - key: retag-kbeads
+  # ── Build kbeads at gasboat calver ───────────────────────────────────
+  # Triggers kbeads CI via workflow_dispatch so it builds from HEAD of main
+  # and pushes the image tagged with the gasboat calver. This ensures
+  # unreleased kbeads commits are included in every gasboat release.
+  - key: build-kbeads
     use: [code, install-crane]
     if: ${{ init.ref-name != 'pr' }}
     cache: false
     run: |
       set -euo pipefail
+
+      # Install gh CLI.
+      curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+      apt-get update -qq && apt-get install -y -qq gh > /dev/null
+
       TAG="${REF_NAME#refs/tags/}"
       TAG="${TAG#refs/heads/}"
 
-      echo "Copying kbeads:latest → kbeads:${TAG}"
-      crane cp ghcr.io/groblegark/kbeads:latest "ghcr.io/groblegark/kbeads:${TAG}"
+      echo "Triggering kbeads CI with version=${TAG}"
+      gh workflow run ci.yml \
+        -R groblegark/kbeads \
+        -f version="${TAG}"
 
-      # Verify the tag was actually created
+      # Wait for the workflow to start and complete (up to 10 minutes).
+      echo "Waiting for kbeads CI to start..."
+      sleep 15
+      RUN_ID=$(gh run list -R groblegark/kbeads -w ci.yml --json databaseId,event,status -q \
+        '[.[] | select(.event=="workflow_dispatch")] | .[0].databaseId')
+
+      if [ -z "$RUN_ID" ]; then
+        echo "ERROR: Could not find kbeads workflow run"
+        exit 1
+      fi
+
+      echo "Waiting for kbeads CI run ${RUN_ID} to complete..."
+      gh run watch "$RUN_ID" -R groblegark/kbeads --exit-status
+
+      echo "kbeads CI completed. Verifying image tag..."
       crane digest "ghcr.io/groblegark/kbeads:${TAG}" > /dev/null
       echo "Verified kbeads:${TAG} exists"
-
-      APP_VERSION=$(grep '^appVersion:' helm/gasboat/Chart.yaml | sed 's/appVersion: *"\?\([^"]*\)"\?/\1/')
-      if [ -n "$APP_VERSION" ] && [ "$APP_VERSION" != "$TAG" ]; then
-        crane tag "ghcr.io/groblegark/kbeads:${TAG}" "$APP_VERSION"
-        crane digest "ghcr.io/groblegark/kbeads:${APP_VERSION}" > /dev/null
-        echo "Verified kbeads:${APP_VERSION} exists"
-      fi
-      echo "Re-tagged kbeads:latest → kbeads:${TAG}"
     env:
       REF_NAME: ${{ init.ref-name }}
+      GH_TOKEN: ${{ secrets.GASBOAT_DISPATCH_TOKEN }}
 
   - key: retag-beads3d
     use: [code, install-crane]

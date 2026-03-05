@@ -14,13 +14,41 @@ set -uo pipefail
 # injects the full checkpoint text, the model processes it (API cost),
 # generates a response, and Claude Code immediately tries to stop again.
 COOLDOWN_FILE="/tmp/stop-gate-last-block"
-COOLDOWN_SECS="${STOP_GATE_COOLDOWN_SECS:-30}"
+BLOCK_COUNT_FILE="/tmp/stop-gate-block-count"
+BASE_COOLDOWN_SECS="${STOP_GATE_COOLDOWN_SECS:-30}"
+MAX_BLOCKS="${STOP_GATE_MAX_BLOCKS:-5}"
 
+# Read current block count.
+block_count=0
+if [ -f "$BLOCK_COUNT_FILE" ]; then
+    block_count=$(cat "$BLOCK_COUNT_FILE" 2>/dev/null || echo 0)
+fi
+
+# ── Escape hatch ───────────────────────────────────────────────────────
+# After too many consecutive blocks, allow the stop to prevent infinite
+# cost-sink loops (decision → yield → block → repeat).
+if [ "$block_count" -ge "$MAX_BLOCKS" ]; then
+    echo "[stop-gate] Escape hatch: $block_count consecutive blocks, allowing stop" >&2
+    echo "<system-reminder>Stop gate escape hatch activated after repeated blocks.</system-reminder>"
+    rm -f "$COOLDOWN_FILE" "$BLOCK_COUNT_FILE"
+    exit 0
+fi
+
+# ── Exponential cooldown debouncing ────────────────────────────────────
+# Cooldown doubles with each block: 30s, 60s, 120s, 240s, 300s (cap).
 if [ -f "$COOLDOWN_FILE" ]; then
     last_block=$(cat "$COOLDOWN_FILE" 2>/dev/null || echo 0)
     now=$(date +%s)
     elapsed=$(( now - last_block ))
-    if [ "$elapsed" -lt "$COOLDOWN_SECS" ]; then
+    # Calculate exponential cooldown: base * 2^(block_count-1), cap at 300s.
+    cooldown=$BASE_COOLDOWN_SECS
+    i=1
+    while [ "$i" -lt "$block_count" ] && [ "$cooldown" -lt 300 ]; do
+        cooldown=$(( cooldown * 2 ))
+        i=$(( i + 1 ))
+    done
+    [ "$cooldown" -gt 300 ] && cooldown=300
+    if [ "$elapsed" -lt "$cooldown" ]; then
         # Still within cooldown — block silently without re-injecting text.
         exit 2
     fi
@@ -47,8 +75,10 @@ echo "$_stdin" | gb bus emit --hook=Stop
 _rc=$?
 
 if [ $_rc -eq 2 ]; then
-    # Record block time for cooldown debouncing.
+    # Record block time and increment counter for exponential backoff.
     date +%s > "$COOLDOWN_FILE"
+    block_count=$(( block_count + 1 ))
+    echo "$block_count" > "$BLOCK_COUNT_FILE"
 
     # Gate blocked — inject checkpoint instructions into the conversation via stdout.
     # Prefer config-bead-materialized file; fall back to hardcoded text.
@@ -60,21 +90,17 @@ if [ $_rc -eq 2 ]; then
 <system-reminder>
 STOP BLOCKED — decision gate unsatisfied.
 
-You are an ephemeral agent. If you have finished your work, close your bead(s) and
-call `gb done` to despawn. If you are blocked mid-task and need human input, create
-a decision checkpoint first.
+You CANNOT stop without either creating a decision checkpoint OR calling `gb done`.
 
-## If work is DONE (preferred path)
+## If work is DONE
 
 ```bash
-kd close <bead-id>        # close completed work
-git add <files> && git commit -m "..." && git push   # push any code changes
-gb done                   # despawn cleanly
+kd close <bead-id>        # close completed beads
+gb done                   # despawn cleanly (bypasses gate)
 ```
 
 ## If BLOCKED and need human input
 
-1. Create a decision with options (each needs an `artifact_type`):
 ```bash
 gb decision create --no-wait \
   --prompt="Did X. Blocked on Y. Recommending option A because..." \
@@ -82,25 +108,24 @@ gb decision create --no-wait \
     {"id":"continue","short":"Continue work","label":"Finish the remaining implementation","artifact_type":"report"},
     {"id":"rethink","short":"Change approach","label":"Switch to alternative design","artifact_type":"plan"}
   ]'
-```
-
-2. Yield and wait:
-```bash
 gb yield
-```
-
-3. If the chosen option requires an artifact, submit it:
-```bash
-gb decision report <decision-id> --content '<artifact content>'
+# IMPORTANT: after yield returns, CONTINUE WORKING on the decision outcome.
+# Do NOT stop or create another decision. Act on the response.
 ```
 </system-reminder>
 CHECKPOINT
     fi
+
+    # After repeated blocks, add escalating guidance.
+    if [ "$block_count" -gt 1 ]; then
+        echo "<system-reminder>You have been blocked ${block_count} time(s). After gb yield returns, CONTINUE WORKING on the decision outcome. Only call gb done when all work is truly complete.</system-reminder>"
+    fi
+
     exit 2
 fi
 
-# Gate allowed — clear cooldown file and gate state.
-rm -f "$COOLDOWN_FILE"
+# Gate allowed — clear cooldown and block count files.
+rm -f "$COOLDOWN_FILE" "$BLOCK_COUNT_FILE"
 
 # Clear any remaining gate state so the next session must re-satisfy from scratch.
 gb gate clear decision 2>/dev/null || true

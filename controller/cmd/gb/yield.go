@@ -81,36 +81,47 @@ POST /v1/agents/{id}/gates/decision/satisfy to release the Stop gate.`,
 			return err
 		}
 
-		// Only satisfy the gate if the yield resolved normally (not timed out or interrupted).
+		// If timed out or interrupted, return without further action.
 		if ctx.Err() != nil {
 			return nil
 		}
 
 		// Re-fetch the resolved decision to check if an artifact is required.
-		// If so, the gate stays pending until 'gb decision report' submits the artifact.
 		resolvedBead, fetchErr := daemon.GetBead(context.Background(), pending.ID)
 		if fetchErr == nil && resolvedBead.Fields["required_artifact"] != "" {
-			fmt.Fprintf(os.Stderr, "Artifact required (%s) — gate stays pending until 'gb decision report %s' is called\n",
+			fmt.Fprintf(os.Stderr, "Artifact required (%s) — run: gb decision report %s --content '<artifact>'\n",
 				resolvedBead.Fields["required_artifact"], pending.ID)
-			return nil
 		}
 
-		// Call satisfy gate — this releases the Stop hook for the next session turn.
-		satisfyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := daemon.SatisfyGate(satisfyCtx, agentID, "decision"); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to satisfy decision gate: %v\n", err)
-		}
-
-		// Mark the agent bead so stop-gate.sh can verify this was a proper yield,
-		// not a manual 'gb gate mark decision' bypass.
+		// Track the yield on the agent bead for stop-gate backoff logic.
+		// NOTE: We intentionally do NOT satisfy the decision gate here.
+		// The gate stays pending so the stop-gate continues to block natural
+		// stops. Only `gb done` (which bypasses the gate via coop shutdown)
+		// should terminate the agent. This prevents yield from accidentally
+		// shutting down thread-bound agents before they act on the decision.
 		markCtx, markCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer markCancel()
+
+		// Increment yield count for backoff tracking.
+		yieldCount := 1
+		if bead, err := daemon.GetBead(markCtx, agentID); err == nil {
+			if prev := bead.Fields["yield_count"]; prev != "" {
+				fmt.Sscanf(prev, "%d", &yieldCount)
+				yieldCount++
+			}
+		}
 		if err := daemon.UpdateBeadFields(markCtx, agentID, map[string]string{
 			"gate_satisfied_by": "yield",
+			"yield_count":       fmt.Sprintf("%d", yieldCount),
 		}); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to set gate_satisfied_by: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Warning: failed to update yield tracking: %v\n", err)
 		}
+
+		// Inject post-yield instructions so the agent continues working.
+		fmt.Println()
+		fmt.Println("Decision resolved. Continue working on the outcome above.")
+		fmt.Println("When ALL work is complete: call `gb done` to despawn.")
+		fmt.Println("Do NOT just exit — the stop gate will block until you call `gb done`.")
 
 		return nil
 	},

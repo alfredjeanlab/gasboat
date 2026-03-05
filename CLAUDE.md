@@ -71,12 +71,14 @@ When multiple agents are running, always follow this sequence to avoid duplicati
 
 ## Release (Golden Release Path)
 
-One canonical path. Template: `kd template apply kd-GwMFKXnPvR --var version=YYYY.DDD.N`
+One canonical path. Template: `kd formula apply kd-GwMFKXnPvR --var version=YYYY.DDD.N`
 
 ```bash
 # 1. Tag coop with the gasboat calver (coop CI builds + pushes the image)
 cd ~/coop && git tag <TAG> && git push origin <TAG>
-# 2. Release gasboat
+# 2. Build kbeads at the gasboat calver (builds from HEAD of main, includes all unreleased commits)
+gh workflow run ci.yml -R groblegark/kbeads -f version=<TAG>
+# 3. Release gasboat (after coop + kbeads CI complete)
 cd ~/gasboat && make release          # bump Chart.yaml, commit, tag
 git push origin main <TAG>            # triggers CI (build + push images + push chart)
 gh release create <TAG> --generate-notes  # publish release notes
@@ -171,7 +173,7 @@ Sister-project images are tagged with the gasboat calver so all images share the
 | Image | Source | How it gets the gasboat calver |
 |---|---|---|
 | `ghcr.io/groblegark/coop:<calver>` | groblegark/coop | Tag coop with gasboat calver → coop CI pushes image |
-| `ghcr.io/groblegark/kbeads:<calver>` | groblegark/kbeads | `retag-kbeads` copies `:latest` → `:<calver>` |
+| `ghcr.io/groblegark/kbeads:<calver>` | groblegark/kbeads | `build-kbeads` triggers kbeads CI via `workflow_dispatch` → builds from HEAD of main |
 | `ghcr.io/groblegark/beads3d:<calver>` | groblegark/beads3d | `retag-beads3d` copies `:latest` → `:<calver>` |
 
 **Coopmux** is tagged directly at the source (coop repo) with the gasboat calver before the gasboat release. This ensures a deterministic, pinned image — no rolling tags.
