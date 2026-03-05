@@ -454,9 +454,19 @@ func (b *Bot) projectFromChannel(ctx context.Context, channelID string) string {
 	}
 	for name, info := range projects {
 		if info.HasChannel(channelID) {
+			b.logger.Debug("projectFromChannel: matched",
+				"channel", channelID, "project", name)
 			return name
 		}
 	}
+	// Log all projects and their channels for debugging.
+	projectChannels := make(map[string][]string, len(projects))
+	for name, info := range projects {
+		projectChannels[name] = info.SlackChannels
+	}
+	b.logger.Info("no project matched channel",
+		"channel", channelID, "project_count", len(projects),
+		"project_channels", projectChannels)
 	return ""
 }
 
