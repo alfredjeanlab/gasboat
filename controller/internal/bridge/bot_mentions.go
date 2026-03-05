@@ -293,6 +293,8 @@ func (b *Bot) handleThreadSpawn(ctx context.Context, ev *slackevents.AppMentionE
 	// Infer project from channel via project beads' slack_channel field
 	// (same lookup /spawn uses), falling back to router override.
 	project := b.projectFromChannel(ctx, channel)
+	b.logger.Info("thread-spawn: project resolution",
+		"channel", channel, "project", project)
 	if project == "" && b.router != nil {
 		if mapped := b.router.GetAgentByChannel(channel); mapped != "" {
 			project = projectFromAgentIdentity(mapped)
