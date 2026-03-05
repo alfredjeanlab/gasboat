@@ -288,8 +288,8 @@ func (b *Bot) NotifyDecision(ctx context.Context, bead BeadEvent) error {
 // UpdateDecision edits the Slack message to show resolved state.
 // Called via SSE close event. The modal submission handler may have already
 // updated the message directly, so this serves as a fallback.
-func (b *Bot) UpdateDecision(ctx context.Context, beadID, chosen string) error {
-	b.updateMessageResolved(ctx, beadID, chosen, "", "", "")
+func (b *Bot) UpdateDecision(ctx context.Context, beadID, chosen, rationale string) error {
+	b.updateMessageResolved(ctx, beadID, chosen, rationale, "", "")
 	return nil
 }
 

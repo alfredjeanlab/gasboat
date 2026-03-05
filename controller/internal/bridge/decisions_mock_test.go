@@ -227,8 +227,9 @@ type reportCall struct {
 }
 
 type updateCall struct {
-	BeadID string
-	Chosen string
+	BeadID    string
+	Chosen    string
+	Rationale string
 }
 
 func (m *mockNotifier) NotifyDecision(_ context.Context, bead BeadEvent) error {
@@ -238,10 +239,10 @@ func (m *mockNotifier) NotifyDecision(_ context.Context, bead BeadEvent) error {
 	return nil
 }
 
-func (m *mockNotifier) UpdateDecision(_ context.Context, beadID, chosen string) error {
+func (m *mockNotifier) UpdateDecision(_ context.Context, beadID, chosen, rationale string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.updated = append(m.updated, updateCall{beadID, chosen})
+	m.updated = append(m.updated, updateCall{beadID, chosen, rationale})
 	return nil
 }
 

@@ -52,7 +52,7 @@ type Notifier interface {
 	// NotifyDecision is called when a new decision bead is created.
 	NotifyDecision(ctx context.Context, bead BeadEvent) error
 	// UpdateDecision is called when a decision bead is closed/resolved.
-	UpdateDecision(ctx context.Context, beadID, chosen string) error
+	UpdateDecision(ctx context.Context, beadID, chosen, rationale string) error
 	// NotifyEscalation is called when a decision bead is escalated.
 	NotifyEscalation(ctx context.Context, bead BeadEvent) error
 	// DismissDecision is called when a decision bead expires (removes Slack message).
@@ -180,7 +180,7 @@ func (d *Decisions) handleClosed(ctx context.Context, data []byte) {
 
 	// Notify external system (e.g., update Slack message).
 	if d.notifier != nil {
-		if err := d.notifier.UpdateDecision(ctx, bead.ID, chosen); err != nil {
+		if err := d.notifier.UpdateDecision(ctx, bead.ID, chosen, rationale); err != nil {
 			d.logger.Error("failed to update decision notification", "id", bead.ID, "error", err)
 		}
 	}

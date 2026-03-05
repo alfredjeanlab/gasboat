@@ -121,7 +121,7 @@ func TestDecisions_HandleClosed_NudgesCoop(t *testing.T) {
 	if len(updated) != 1 {
 		t.Fatalf("expected 1 update call, got %d", len(updated))
 	}
-	if updated[0].BeadID != "dec-1" || updated[0].Chosen != "blue" {
+	if updated[0].BeadID != "dec-1" || updated[0].Chosen != "blue" || updated[0].Rationale != "it's calming" {
 		t.Errorf("unexpected update call: %+v", updated[0])
 	}
 }

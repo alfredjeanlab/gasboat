@@ -137,7 +137,7 @@ func (s *SlackNotifier) NotifyDecision(ctx context.Context, bead BeadEvent) erro
 }
 
 // UpdateDecision edits the Slack message to show the resolved state.
-func (s *SlackNotifier) UpdateDecision(ctx context.Context, beadID, chosen string) error {
+func (s *SlackNotifier) UpdateDecision(ctx context.Context, beadID, chosen, _ string) error {
 	s.mu.Lock()
 	ts, ok := s.messages[beadID]
 	s.mu.Unlock()
