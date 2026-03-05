@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"regexp"
 	"strings"
+	"time"
 
 	"gasboat/controller/internal/beadsapi"
 
@@ -27,6 +28,8 @@ func (b *Bot) handleSlashCommand(ctx context.Context, cmd slack.SlashCommand) {
 		b.handleKillCommand(ctx, cmd)
 	case "/unreleased":
 		b.handleUnreleasedCommand(ctx, cmd)
+	case "/clear-threads":
+		b.handleClearThreadsCommand(ctx, cmd)
 	default:
 		b.logger.Debug("unhandled slash command", "command", cmd.Command)
 	}
@@ -622,6 +625,32 @@ func (b *Bot) handleKillCommand(ctx context.Context, cmd slack.SlashCommand) {
 
 	_, _ = b.api.PostEphemeral(cmd.ChannelID, cmd.UserID,
 		slack.MsgOptionText(fmt.Sprintf(":hourglass_flowing_sand: Killing agent *%s*…", agentName), false))
+}
+
+// handleClearThreadsCommand removes all thread→agent mappings from state.
+// This is an admin escape hatch for when stale bindings prevent new agents
+// from spawning in threads.
+func (b *Bot) handleClearThreadsCommand(_ context.Context, cmd slack.SlashCommand) {
+	if b.state == nil {
+		_, _ = b.api.PostEphemeral(cmd.ChannelID, cmd.UserID,
+			slack.MsgOptionText(":x: State manager not available", false))
+		return
+	}
+
+	n, err := b.state.ClearAllThreadAgents()
+	if err != nil {
+		_, _ = b.api.PostEphemeral(cmd.ChannelID, cmd.UserID,
+			slack.MsgOptionText(fmt.Sprintf(":x: Failed to clear thread mappings: %s", err), false))
+		return
+	}
+
+	// Also clear the in-memory lastThreadNudge map.
+	b.mu.Lock()
+	b.lastThreadNudge = make(map[string]time.Time)
+	b.mu.Unlock()
+
+	_, _ = b.api.PostEphemeral(cmd.ChannelID, cmd.UserID,
+		slack.MsgOptionText(fmt.Sprintf(":broom: Cleared %d thread→agent mappings.", n), false))
 }
 
 // handleRosterCommand shows the agent dashboard as an ephemeral message.

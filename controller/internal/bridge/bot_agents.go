@@ -300,6 +300,11 @@ func (b *Bot) NotifyAgentState(_ context.Context, bead BeadEvent) {
 		defer cancel()
 		if slackChannel, slackTS := b.resolveAgentThread(ctx, agent); slackChannel != "" && slackTS != "" {
 			b.postThreadStateReply(ctx, agent, state, bead, slackChannel, slackTS)
+			// Clear thread→agent mapping so future mentions in this thread
+			// spawn a fresh agent instead of routing to the dead one.
+			if b.state != nil {
+				_ = b.state.RemoveThreadAgentByAgent(agent)
+			}
 			return
 		}
 	}
@@ -598,6 +603,12 @@ func (b *Bot) killAgent(ctx context.Context, agentName string, force bool) error
 			b.logger.Error("kill agent: failed to delete card", "agent", agentName, "error", err)
 		}
 	}
+
+	// Clean up any thread→agent mappings for this agent.
+	if b.state != nil {
+		_ = b.state.RemoveThreadAgentByAgent(agentName)
+	}
+
 	return nil
 }
 

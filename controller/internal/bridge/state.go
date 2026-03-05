@@ -217,6 +217,26 @@ func (sm *StateManager) RemoveThreadAgentByAgent(agent string) error {
 	return sm.saveLocked()
 }
 
+// AllThreadAgents returns a copy of all thread→agent mappings.
+func (sm *StateManager) AllThreadAgents() map[string]string {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	out := make(map[string]string, len(sm.data.ThreadAgents))
+	for k, v := range sm.data.ThreadAgents {
+		out[k] = v
+	}
+	return out
+}
+
+// ClearAllThreadAgents removes all thread→agent associations and persists.
+func (sm *StateManager) ClearAllThreadAgents() (int, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	n := len(sm.data.ThreadAgents)
+	sm.data.ThreadAgents = make(map[string]string)
+	return n, sm.saveLocked()
+}
+
 // --- Dashboard ---
 
 // GetDashboard returns the dashboard message ref.
