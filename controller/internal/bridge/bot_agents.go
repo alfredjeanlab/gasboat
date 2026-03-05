@@ -96,6 +96,20 @@ func (b *Bot) pruneStaleAgentCards(ctx context.Context) {
 	}
 }
 
+// startPeriodicPrune runs pruneStaleAgentCards every 5 minutes until ctx is cancelled.
+func (b *Bot) startPeriodicPrune(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			b.pruneStaleAgentCards(ctx)
+		}
+	}
+}
+
 // agentTaskTitle fetches the title of the task currently claimed by agent.
 // Returns "" if none is found or on error. Tries both the full identity
 // and the short name to handle assignee format mismatches.

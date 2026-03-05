@@ -15,10 +15,16 @@ import (
 	"gasboat/controller/internal/beadsapi"
 )
 
+// dedupTTL is the maximum age of entries in the dedup map before cleanup.
+const dedupTTL = 2 * time.Hour
+
+// dedupCleanupInterval is how often the dedup map is swept for expired entries.
+const dedupCleanupInterval = 10 * time.Minute
+
 // Dedup provides event deduplication for the slack-bridge watchers.
 type Dedup struct {
 	mu   sync.Mutex
-	seen map[string]bool // prefixed key → true
+	seen map[string]time.Time // prefixed key → first-seen time
 
 	logger *slog.Logger
 }
@@ -26,9 +32,48 @@ type Dedup struct {
 // NewDedup creates a new event deduplicator.
 func NewDedup(logger *slog.Logger) *Dedup {
 	return &Dedup{
-		seen:   make(map[string]bool),
+		seen:   make(map[string]time.Time),
 		logger: logger,
 	}
+}
+
+// StartCleanup runs a periodic goroutine that removes expired entries from the
+// dedup map. It blocks until ctx is cancelled.
+func (d *Dedup) StartCleanup(ctx context.Context) {
+	ticker := time.NewTicker(dedupCleanupInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			d.cleanup()
+		}
+	}
+}
+
+// cleanup removes entries older than dedupTTL.
+func (d *Dedup) cleanup() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	now := time.Now()
+	expired := 0
+	for key, t := range d.seen {
+		if now.Sub(t) > dedupTTL {
+			delete(d.seen, key)
+			expired++
+		}
+	}
+	if expired > 0 {
+		d.logger.Debug("dedup cleanup", "expired", expired, "remaining", len(d.seen))
+	}
+}
+
+// Len returns the number of entries in the dedup map (for testing).
+func (d *Dedup) Len() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.seen)
 }
 
 // Seen returns true if the key has already been processed. If not, marks it as seen.
@@ -36,17 +81,17 @@ func NewDedup(logger *slog.Logger) *Dedup {
 func (d *Dedup) Seen(key string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.seen[key] {
+	if _, ok := d.seen[key]; ok {
 		return true
 	}
-	d.seen[key] = true
+	d.seen[key] = time.Now()
 	return false
 }
 
 // Mark records a key as seen without checking.
 func (d *Dedup) Mark(key string) {
 	d.mu.Lock()
-	d.seen[key] = true
+	d.seen[key] = time.Now()
 	d.mu.Unlock()
 }
 

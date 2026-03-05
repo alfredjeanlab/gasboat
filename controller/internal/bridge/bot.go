@@ -188,6 +188,9 @@ func (b *Bot) Run(ctx context.Context) error {
 	// This prevents stale cards from reappearing after bot restarts.
 	b.pruneStaleAgentCards(ctx)
 
+	// Start periodic pruning to catch zombie cards from crashed agent pods.
+	go b.startPeriodicPrune(ctx)
+
 	go b.handleEvents(ctx)
 
 	err = b.socket.RunContext(ctx)

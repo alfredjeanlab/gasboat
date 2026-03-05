@@ -400,6 +400,8 @@ func reportEmoji(reportType string) string {
 // PostReport inlines the report into the resolved decision message.
 // Slack's Block Kit automatically renders a "Show more" link for long content,
 // so we send the full report as blocks and let the platform handle truncation.
+// If the original message was deleted, falls back to posting the report as a
+// new message in the same thread or channel.
 func (b *Bot) PostReport(ctx context.Context, decisionID, reportType, content string) error {
 	ref, ok := b.lookupMessage(decisionID)
 	if !ok {
@@ -421,6 +423,7 @@ func (b *Bot) PostReport(ctx context.Context, decisionID, reportType, content st
 	// Thread replies are not visible in conversations.history — use
 	// conversations.replies when the message was posted in a thread.
 	var existing slack.Message
+	messageFound := false
 	if ref.ThreadTS != "" {
 		replies, _, _, err := b.api.GetConversationReplies(&slack.GetConversationRepliesParameters{
 			ChannelID: ref.ChannelID,
@@ -431,20 +434,16 @@ func (b *Bot) PostReport(ctx context.Context, decisionID, reportType, content st
 			Limit:     1,
 		})
 		if err != nil {
-			return fmt.Errorf("fetch decision message from thread: %w", err)
-		}
-		found := false
-		for _, m := range replies {
-			if m.Timestamp == ref.Timestamp {
-				existing = m
-				found = true
-				break
+			b.logger.Warn("fetch decision message from thread failed, will post as new message",
+				"decision", decisionID, "error", err)
+		} else {
+			for _, m := range replies {
+				if m.Timestamp == ref.Timestamp {
+					existing = m
+					messageFound = true
+					break
+				}
 			}
-		}
-		if !found {
-			b.logger.Warn("decision message not found in thread replies",
-				"decision", decisionID, "channel", ref.ChannelID, "ts", ref.Timestamp, "thread_ts", ref.ThreadTS)
-			return nil
 		}
 	} else {
 		msgs, err := b.api.GetConversationHistory(&slack.GetConversationHistoryParameters{
@@ -454,12 +453,18 @@ func (b *Bot) PostReport(ctx context.Context, decisionID, reportType, content st
 			Limit:     1,
 		})
 		if err != nil {
-			return fmt.Errorf("fetch decision message: %w", err)
+			b.logger.Warn("fetch decision message failed, will post as new message",
+				"decision", decisionID, "error", err)
+		} else if len(msgs.Messages) > 0 {
+			existing = msgs.Messages[0]
+			messageFound = true
 		}
-		if len(msgs.Messages) == 0 {
-			return nil
-		}
-		existing = msgs.Messages[0]
+	}
+
+	// Fallback: if original message was deleted or not found, post as new message
+	// in the same thread or channel.
+	if !messageFound {
+		return b.postReportFallback(ctx, ref, decisionID, decisionTitle, reportType, content, emoji)
 	}
 
 	// Build updated blocks: keep existing blocks, append divider + report.
@@ -501,11 +506,53 @@ func (b *Bot) PostReport(ctx context.Context, decisionID, reportType, content st
 		slack.MsgOptionBlocks(blocks...),
 	)
 	if updateErr != nil {
-		b.logger.Error("failed to inline report", "decision", decisionID, "error", updateErr)
-		return fmt.Errorf("update decision message with report: %w", updateErr)
+		// Update failed (message may have been deleted between fetch and update).
+		// Fall back to posting as a new message.
+		b.logger.Warn("failed to inline report, falling back to new message",
+			"decision", decisionID, "error", updateErr)
+		return b.postReportFallback(ctx, ref, decisionID, decisionTitle, reportType, content, emoji)
 	}
 
 	b.logger.Info("inlined report in decision message",
+		"decision", decisionID, "report_type", reportType, "channel", ref.ChannelID)
+	return nil
+}
+
+// postReportFallback posts a report as a new message when the original decision
+// message is unavailable (deleted, expired, etc.).
+func (b *Bot) postReportFallback(ctx context.Context, ref MessageRef, decisionID, decisionTitle, reportType, content, emoji string) error {
+	blocks := []slack.Block{
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn",
+				fmt.Sprintf("%s *Report (%s)* — Decision: _%s_", emoji, reportType, decisionTitle), false, false),
+			nil, nil),
+		slack.NewDividerBlock(),
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn",
+				fmt.Sprintf("```\n%s\n```", content), false, false),
+			nil, nil),
+	}
+
+	msgOpts := []slack.MsgOption{
+		slack.MsgOptionText(fmt.Sprintf("Report (%s) for decision %s", reportType, decisionTitle), false),
+		slack.MsgOptionBlocks(blocks...),
+	}
+
+	// Thread under the original thread if available.
+	threadTS := ref.ThreadTS
+	if threadTS == "" {
+		threadTS = ref.Timestamp
+	}
+	if threadTS != "" {
+		msgOpts = append(msgOpts, slack.MsgOptionTS(threadTS))
+	}
+
+	_, _, err := b.api.PostMessageContext(ctx, ref.ChannelID, msgOpts...)
+	if err != nil {
+		return fmt.Errorf("post report fallback: %w", err)
+	}
+
+	b.logger.Info("posted report as fallback message",
 		"decision", decisionID, "report_type", reportType, "channel", ref.ChannelID)
 	return nil
 }

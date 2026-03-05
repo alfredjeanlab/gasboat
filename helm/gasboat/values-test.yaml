@@ -1,0 +1,58 @@
+# Gasboat Test Overlay
+# Deploy: helm install gasboat-test helm/gasboat/ -n gasboat-test -f helm/gasboat/values-test.yaml
+#
+# Prerequisites:
+#   1. Create namespace: kubectl create namespace gasboat-test
+#   2. Create Slack creds secret:
+#      kubectl create secret generic gasboat-test-slack-creds \
+#        --namespace gasboat-test \
+#        --from-literal=bot-token=xoxb-... \
+#        --from-literal=app-token=xapp-... \
+#        --from-literal=signing-secret=...
+#   3. Ensure beads daemon is accessible (reuse existing or deploy separate)
+
+# Disable all components except the slack bridge.
+agents:
+  enabled: false
+
+beads:
+  enabled: false
+
+coopmux:
+  enabled: false
+
+nats:
+  enabled: false
+
+postgresql:
+  enabled: false
+
+adviceViewer:
+  enabled: false
+
+# Enable slack bridge in test mode.
+slackBridge:
+  enabled: true
+
+  logLevel: debug
+
+  slack:
+    secretName: gasboat-test-slack-creds
+    channel: ""        # Set to your #gasboat-test channel ID (C...)
+    threadingMode: "agent"
+
+  dashboard:
+    enabled: true
+    channel: ""        # Same as above, or a separate dashboard channel
+
+  persistence:
+    enabled: true
+    size: 100Mi
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi

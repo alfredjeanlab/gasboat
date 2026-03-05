@@ -296,6 +296,9 @@ func main() {
 	})
 	beadActivity.RegisterHandlers(sseStream)
 
+	// Start periodic dedup map cleanup to prevent unbounded growth.
+	go dedup.StartCleanup(ctx)
+
 	// Catch-up: notify pending decisions that may have been missed during downtime.
 	// Run before SSE stream starts to pre-populate dedup map.
 	go dedup.CatchUpDecisions(ctx, daemon, notifier, logger)

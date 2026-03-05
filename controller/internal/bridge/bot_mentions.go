@@ -232,6 +232,25 @@ func (b *Bot) handleThreadSpawn(ctx context.Context, ev *slackevents.AppMentionE
 	channel := ev.Channel
 	threadTS := ev.ThreadTimeStamp
 
+	// Guard: prevent spawning duplicate agents for the same thread.
+	// Another mention may have raced us, or the state may have been set
+	// between the caller's check and this point.
+	if b.state != nil {
+		if agent, ok := b.state.GetThreadAgent(channel, threadTS); ok {
+			b.logger.Info("thread-spawn: agent already bound to thread, skipping",
+				"channel", channel, "thread_ts", threadTS, "agent", agent)
+			if b.api != nil {
+				_, _, _ = b.api.PostMessage(channel,
+					slack.MsgOptionText(
+						fmt.Sprintf(":information_source: An agent (*%s*) is already working in this thread.", extractAgentName(agent)),
+						false),
+					slack.MsgOptionTS(threadTS),
+				)
+			}
+			return
+		}
+	}
+
 	// Fetch thread context from Slack.
 	threadContext := b.fetchThreadContext(ctx, channel, threadTS)
 
@@ -363,14 +382,37 @@ func projectFromAgentIdentity(identity string) string {
 
 // resolveAgentThread checks if the given agent is thread-bound (spawned from a
 // Slack thread). Returns the thread's channel and timestamp if so, or empty
-// strings for regular agents.
+// strings for regular agents. Validates that both fields are non-empty and
+// well-formed before returning them.
 func (b *Bot) resolveAgentThread(ctx context.Context, agent string) (channel, threadTS string) {
 	agentName := extractAgentName(agent)
 	detail, err := b.daemon.FindAgentBead(ctx, agentName)
 	if err != nil {
 		return "", ""
 	}
-	return detail.Fields["slack_thread_channel"], detail.Fields["slack_thread_ts"]
+	ch := detail.Fields["slack_thread_channel"]
+	ts := detail.Fields["slack_thread_ts"]
+	if !isValidThreadBinding(ch, ts) {
+		return "", ""
+	}
+	return ch, ts
+}
+
+// isValidThreadBinding validates that a Slack thread binding has both a
+// non-empty channel ID and a well-formed timestamp (contains a dot separator).
+func isValidThreadBinding(channel, threadTS string) bool {
+	if channel == "" || threadTS == "" {
+		return false
+	}
+	// Slack channel IDs start with C, D, or G.
+	if len(channel) < 2 {
+		return false
+	}
+	// Slack timestamps are "seconds.microseconds" format.
+	if !strings.Contains(threadTS, ".") {
+		return false
+	}
+	return true
 }
 
 // stripBotMention removes all <@BOTID> occurrences from text and trims whitespace.
