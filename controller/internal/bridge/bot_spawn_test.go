@@ -695,6 +695,114 @@ func TestHandleSpawnCommand_TaskFirstMode_CreatesTaskBeadAndSpawns(t *testing.T)
 	}
 }
 
+func TestHandleSpawnCommand_ProjectAndTaskDescription(t *testing.T) {
+	daemon := newMockDaemon()
+	daemon.seedProject("gasboat")
+	slackSrv := newFakeSlackServer(t)
+	defer slackSrv.Close()
+
+	bot := newTestBot(daemon, slackSrv)
+
+	bot.handleSpawnCommand(context.Background(), slack.SlashCommand{
+		Command:   "/spawn",
+		Text:      `gasboat "fix the auth flow"`,
+		ChannelID: "C123",
+		UserID:    "U456",
+	})
+
+	taskBeads := filterBeadsByType(daemon.beads, "task")
+	if len(taskBeads) != 1 {
+		t.Fatalf("expected 1 task bead created, got %d", len(taskBeads))
+	}
+	for _, b := range taskBeads {
+		if b.Title != "fix the auth flow" {
+			t.Errorf("expected task title=%q, got %q", "fix the auth flow", b.Title)
+		}
+		if !containsLabel(b.Labels, "project:gasboat") {
+			t.Errorf("expected task to have label project:gasboat, got %v", b.Labels)
+		}
+	}
+
+	agentBeads := filterAgentBeads(daemon.beads)
+	if len(agentBeads) != 1 {
+		t.Fatalf("expected 1 agent bead created, got %d", len(agentBeads))
+	}
+	for _, b := range agentBeads {
+		if b.Fields["project"] != "gasboat" {
+			t.Errorf("expected project=gasboat, got %s", b.Fields["project"])
+		}
+		// Name should be derived from task description.
+		if !strings.HasPrefix(b.Title, "fix-the-auth-") {
+			t.Errorf("expected name derived from task description, got %q", b.Title)
+		}
+		if b.Description == "" {
+			t.Error("expected agent description to reference task bead, got empty")
+		}
+	}
+}
+
+func TestHandleSpawnCommand_ProjectAndTaskDescriptionWithRole(t *testing.T) {
+	daemon := newMockDaemon()
+	daemon.seedProject("gasboat")
+	slackSrv := newFakeSlackServer(t)
+	defer slackSrv.Close()
+
+	bot := newTestBot(daemon, slackSrv)
+
+	bot.handleSpawnCommand(context.Background(), slack.SlashCommand{
+		Command:   "/spawn",
+		Text:      `gasboat "deploy the new service" --role devops`,
+		ChannelID: "C123",
+		UserID:    "U456",
+	})
+
+	agentBeads := filterAgentBeads(daemon.beads)
+	if len(agentBeads) != 1 {
+		t.Fatalf("expected 1 agent bead created, got %d", len(agentBeads))
+	}
+	for _, b := range agentBeads {
+		if b.Fields["role"] != "devops" {
+			t.Errorf("expected role=devops, got %s", b.Fields["role"])
+		}
+		if b.Fields["project"] != "gasboat" {
+			t.Errorf("expected project=gasboat, got %s", b.Fields["project"])
+		}
+	}
+
+	taskBeads := filterBeadsByType(daemon.beads, "task")
+	if len(taskBeads) != 1 {
+		t.Fatalf("expected 1 task bead created, got %d", len(taskBeads))
+	}
+}
+
+func TestHandleSpawnCommand_ProjectAndTaskDescriptionOverridesChannel(t *testing.T) {
+	daemon := newMockDaemon()
+	daemon.seedProjectWithChannel("monorepo", "C-MONO")
+	daemon.seedProject("gasboat")
+	slackSrv := newFakeSlackServer(t)
+	defer slackSrv.Close()
+
+	bot := newTestBot(daemon, slackSrv)
+
+	// Channel maps to monorepo, but explicit project arg says gasboat.
+	bot.handleSpawnCommand(context.Background(), slack.SlashCommand{
+		Command:   "/spawn",
+		Text:      `gasboat "fix something"`,
+		ChannelID: "C-MONO",
+		UserID:    "U456",
+	})
+
+	agentBeads := filterAgentBeads(daemon.beads)
+	if len(agentBeads) != 1 {
+		t.Fatalf("expected 1 agent bead created, got %d", len(agentBeads))
+	}
+	for _, b := range agentBeads {
+		if b.Fields["project"] != "gasboat" {
+			t.Errorf("expected project=gasboat (explicit arg), got %s", b.Fields["project"])
+		}
+	}
+}
+
 func TestHandleSpawnCommand_TaskFirstMode_NoProject(t *testing.T) {
 	daemon := newMockDaemon()
 	slackSrv := newFakeSlackServer(t)

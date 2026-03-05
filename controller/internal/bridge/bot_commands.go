@@ -61,11 +61,20 @@ func (b *Bot) handleSpawnCommand(ctx context.Context, cmd slack.SlashCommand) {
 
 	taskID := ""
 
-	// If the first positional arg contains spaces, it's a task description
-	// (task-first mode, same as before).
+	// Detect task description: either positional[0] has spaces (old form: /spawn "desc"),
+	// or positional[0] is a plain project name and positional[1] has spaces
+	// (new form: /spawn gasboat "desc").
+	taskDescription := ""
 	if len(positional) > 0 && strings.Contains(positional[0], " ") {
+		taskDescription = positional[0]
+	} else if len(positional) >= 2 && strings.Contains(positional[1], " ") {
+		// /spawn <project> "task description"
+		project = positional[0]
+		taskDescription = positional[1]
+	}
+
+	if taskDescription != "" {
 		// Task-first mode: create a task bead, auto-generate name from description.
-		taskDescription := positional[0]
 		agentName := generateAgentName(taskDescription)
 
 		// Validate project exists.
