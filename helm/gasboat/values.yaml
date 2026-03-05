@@ -228,8 +228,14 @@ agents:
 
   # K8s secret with Mezmo MCP service key for observability log analysis in agent pods.
   # The secret must contain a "token" key with the Mezmo service key value.
-  # Can also be provisioned via config bead credentials system.
   mezmoServiceKeySecret: ""
+  mezmoServiceKeyExternalSecret:
+    enabled: false
+    secretStoreName: "secretstore"
+    secretStoreKind: ClusterSecretStore
+    refreshInterval: "15m"
+    remoteRef: ""              # e.g. "gasboat/mezmo-service-key"
+    tokenProperty: "token"
   rwxAccessTokenExternalSecret:
     enabled: false
     secretStoreName: "secretstore"
