@@ -144,6 +144,8 @@ func configs() map[string]any {
 				{Name: "env", Type: "json"},
 				{Name: "env_json", Type: "json"},
 				{Name: "repos", Type: "json"},
+				// Slack channel ID for channel-to-project resolution (/spawn).
+				{Name: "slack_channel", Type: "string"},
 				// Auto-assignment control: "true" (default) or "false".
 				// Inherited by agents unless overridden on the agent bead.
 				{Name: "auto_assign", Type: "string"},
