@@ -8,6 +8,16 @@
 
 set -uo pipefail
 
+# ── Yield-aware fast path ────────────────────────────────────────────────
+# When the agent is actively yielding on a decision, there's nothing more
+# it can do — the decision exists, the agent is waiting. Block silently
+# with no output to avoid burning context on repeated stop hook feedback.
+# The yield marker is written by gb yield and cleared on exit.
+YIELD_MARKER="/tmp/stop-gate-yielding"
+if [ -f "$YIELD_MARKER" ]; then
+    exit 2
+fi
+
 # ── Cooldown debouncing ──────────────────────────────────────────────────
 # If we already blocked within the cooldown window, exit 2 silently
 # (no text injection). This prevents the loop where every blocked stop

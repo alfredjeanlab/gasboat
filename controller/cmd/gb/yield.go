@@ -77,6 +77,14 @@ POST /v1/agents/{id}/gates/decision/satisfy to release the Stop gate.`,
 		}
 		fmt.Fprintf(os.Stderr, "Yielding on decision %s: %s\n", pending.ID, prompt)
 
+		// Write yield marker so stop-gate.sh can fast-path block silently
+		// without injecting text or burning context on repeated stop hooks.
+		const yieldMarker = "/tmp/stop-gate-yielding"
+		if f, err := os.Create(yieldMarker); err == nil {
+			f.Close()
+		}
+		defer os.Remove(yieldMarker)
+
 		if err := yieldSSE(ctx, []*beadsapi.BeadDetail{pending}); err != nil {
 			return err
 		}
