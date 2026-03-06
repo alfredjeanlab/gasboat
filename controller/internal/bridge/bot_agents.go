@@ -215,6 +215,7 @@ func (b *Bot) NotifyAgentSpawn(ctx context.Context, bead BeadEvent) {
 	// Thread-bound agents: skip the spawn notification here because
 	// handleThreadSpawn already posted a confirmation in the thread
 	// ("Spinning up..." or "Assigned a prewarmed agent...").
+	// Posting again would create duplicate notifications.
 	if slackChannel, slackTS := b.resolveAgentThread(ctx, agent); slackChannel != "" && slackTS != "" {
 		b.logger.Debug("skipping spawn notification for thread-bound agent",
 			"agent", agent, "channel", slackChannel, "thread_ts", slackTS)
