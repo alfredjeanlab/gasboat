@@ -758,6 +758,42 @@ if [ "${MOCK_MODE}" != "1" ]; then
     refresh_credentials &
 fi
 
+# ── Standby mode (prewarmed agents) ──────────────────────────────────────
+# When BOAT_STANDBY=true, the agent is prewarmed: workspace is ready but
+# Claude should not start until the pool manager assigns work. We poll the
+# bead's agent_state via the daemon and wait until it changes from "prewarmed".
+if [ "${BOAT_STANDBY:-}" = "true" ] && [ -n "${BOAT_AGENT_BEAD_ID:-}" ]; then
+    echo "[entrypoint] Standby mode: waiting for assignment (bead: ${BOAT_AGENT_BEAD_ID})"
+    STANDBY_POLL_INTERVAL="${BOAT_STANDBY_POLL:-5}"
+    STANDBY_MAX_WAIT="${BOAT_STANDBY_TTL:-1800}"
+    standby_elapsed=0
+
+    while true; do
+        if [ "${standby_elapsed}" -ge "${STANDBY_MAX_WAIT}" ]; then
+            echo "[entrypoint] Standby TTL (${STANDBY_MAX_WAIT}s) exceeded, exiting"
+            exit 0
+        fi
+
+        # Check agent_state via kd (faster than raw curl + jq).
+        if command -v kd &>/dev/null; then
+            current_state=$(kd show "${BOAT_AGENT_BEAD_ID}" --json 2>/dev/null \
+                | jq -r '.fields.agent_state // "prewarmed"' 2>/dev/null) || current_state="prewarmed"
+        else
+            # Fallback: query daemon HTTP API directly.
+            current_state=$(curl -sf "${BEADS_HTTP_ADDR:-http://localhost:8080}/v1/beads/${BOAT_AGENT_BEAD_ID}" 2>/dev/null \
+                | jq -r '.fields.agent_state // "prewarmed"' 2>/dev/null) || current_state="prewarmed"
+        fi
+
+        if [ "${current_state}" != "prewarmed" ]; then
+            echo "[entrypoint] Assignment received (state: ${current_state}), exiting standby"
+            break
+        fi
+
+        sleep "${STANDBY_POLL_INTERVAL}"
+        standby_elapsed=$((standby_elapsed + STANDBY_POLL_INTERVAL))
+    done
+fi
+
 # ── Restart loop ──────────────────────────────────────────────────────────
 MAX_RESTARTS="${COOP_MAX_RESTARTS:-10}"
 restart_count=0
