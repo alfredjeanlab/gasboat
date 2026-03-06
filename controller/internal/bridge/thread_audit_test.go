@@ -373,6 +373,85 @@ func TestPostReport_FallbackWhenThreadMessageNotFound(t *testing.T) {
 	}
 }
 
+// TestPostReport_FallbackWhenDifferentMessageReturned verifies that PostReport
+// falls back to a new message when conversations.history returns a different
+// message (the target was deleted and Slack returns the nearest remaining one).
+func TestPostReport_FallbackWhenDifferentMessageReturned(t *testing.T) {
+	daemon := newMockDaemon()
+	daemon.beads["dec-3"] = &beadsapi.BeadDetail{
+		ID:       "dec-3",
+		Type:     "decision",
+		Title:    "Approve?",
+		Priority: 2,
+	}
+
+	var postedPaths []string
+	slackSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		postedPaths = append(postedPaths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/conversations.history":
+			// Return a DIFFERENT message (the target was deleted, Slack
+			// returns the nearest remaining message with a different ts).
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true,
+				"messages": []any{
+					map[string]any{
+						"ts":   "9999.0000",
+						"text": "Some other message",
+					},
+				},
+			})
+		case "/chat.postMessage":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true,
+				"ts": "fallback-ts",
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		}
+	}))
+	defer slackSrv.Close()
+
+	bot := newTestBot(daemon, slackSrv)
+
+	// Pre-populate message ref pointing to a message that was deleted.
+	bot.messages["dec-3"] = MessageRef{
+		ChannelID: "C123",
+		Timestamp: "1111.2222",
+	}
+
+	err := bot.PostReport(context.Background(), "dec-3", "plan", "Plan content")
+	if err != nil {
+		t.Fatalf("PostReport should not error on fallback: %v", err)
+	}
+
+	// Should have called conversations.history (wrong ts) then chat.postMessage (fallback).
+	hasHistory := false
+	hasPost := false
+	hasUpdate := false
+	for _, p := range postedPaths {
+		if p == "/conversations.history" {
+			hasHistory = true
+		}
+		if p == "/chat.postMessage" {
+			hasPost = true
+		}
+		if p == "/chat.update" {
+			hasUpdate = true
+		}
+	}
+	if !hasHistory {
+		t.Error("expected conversations.history call")
+	}
+	if !hasPost {
+		t.Error("expected fallback chat.postMessage call")
+	}
+	if hasUpdate {
+		t.Error("should NOT have called chat.update (would modify wrong message)")
+	}
+}
+
 func TestPostReport_NoMessageRef(t *testing.T) {
 	daemon := newMockDaemon()
 	slackSrv := newFakeSlackServer(t)

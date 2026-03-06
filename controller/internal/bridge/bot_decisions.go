@@ -460,7 +460,9 @@ func (b *Bot) PostReport(ctx context.Context, decisionID, reportType, content st
 		if err != nil {
 			b.logger.Warn("fetch decision message failed, will post as new message",
 				"decision", decisionID, "error", err)
-		} else if len(msgs.Messages) > 0 {
+		} else if len(msgs.Messages) > 0 && msgs.Messages[0].Timestamp == ref.Timestamp {
+			// Verify timestamp matches — if the message was deleted, Slack may
+			// return the nearest remaining message with a different timestamp.
 			existing = msgs.Messages[0]
 			messageFound = true
 		}
