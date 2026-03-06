@@ -165,6 +165,24 @@ agents:
   # Periodic reconciliation interval (e.g. "60s", "5m")
   coopSyncInterval: ""
 
+  # --- Autodestruct ---
+  #
+  # Emergency kill-switch: force-deletes all agent pods and pauses reconciliation.
+  # The controller exposes POST /autodestruct, POST /autodestruct/clear, and
+  # GET /autodestruct/status endpoints, protected by a bearer token.
+  autodestruct:
+    # Enable autodestruct endpoints on the controller (default: true).
+    # When false, the endpoints return 503 Service Unavailable.
+    enabled: true
+    # Bearer token for the autodestruct HTTP endpoints (for dev/testing).
+    token: ""
+    # K8s secret name containing the autodestruct bearer token (key: "token").
+    # Takes precedence over the inline token value.
+    tokenSecret: ""
+    # Comma-separated Slack user IDs allowed to trigger autodestruct via the
+    # bridge's Slack command. Passed as AUTODESTRUCT_ALLOWED_USERS env var.
+    allowedSlackUsers: ""
+
   # --- Secrets & credentials ---
   #
   # Per-project secrets (Claude OAuth token, git credentials, GitHub/GitLab tokens,

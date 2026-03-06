@@ -213,6 +213,22 @@ spec:
               value: {{ .Values.agents.externalSecretStore.refreshInterval | quote }}
             {{- end }}
             {{- end }}
+            {{- if .Values.agents.autodestruct.enabled }}
+            {{- if .Values.agents.autodestruct.tokenSecret }}
+            - name: AUTODESTRUCT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.agents.autodestruct.tokenSecret }}
+                  key: token
+            {{- else if .Values.agents.autodestruct.token }}
+            - name: AUTODESTRUCT_TOKEN
+              value: {{ .Values.agents.autodestruct.token | quote }}
+            {{- end }}
+            {{- if .Values.agents.autodestruct.allowedSlackUsers }}
+            - name: AUTODESTRUCT_ALLOWED_USERS
+              value: {{ .Values.agents.autodestruct.allowedSlackUsers | quote }}
+            {{- end }}
+            {{- end }}
             # Slack env vars removed — now handled by slack-bridge container (bd-8x8fy).
           resources:
             {{- toYaml .Values.agents.resources | nindent 12 }}
