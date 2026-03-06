@@ -9,6 +9,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -67,6 +68,11 @@ func setupWorkspace(cfg k8sConfig) error {
 		if err := writeDaemonConfig(cfg.workspace, daemonURL); err != nil {
 			fmt.Printf("[gb agent start] warning: daemon config: %v\n", err)
 		}
+	}
+
+	// 6. Clone project repos (source of truth: project bead, fallback: BOAT_PROJECTS env).
+	if err := runSetupRepos(context.Background(), cfg.workspace); err != nil {
+		fmt.Printf("[gb agent start] warning: repo clone: %v\n", err)
 	}
 
 	return nil
