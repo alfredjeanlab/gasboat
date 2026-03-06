@@ -546,14 +546,16 @@ func TestAgents_HandleUpdated_TaskReassigned(t *testing.T) {
 	a.handleUpdated(context.Background(), reassignedTask)
 
 	updates := notif.getTaskUpdates()
+	// 3 updates: matt-1 (claim), matt-2 (new assignee), matt-1 (previous assignee refresh).
 	if len(updates) != 3 {
-		t.Fatalf("expected 3 task updates (claim + new assignee + previous assignee), got %d", len(updates))
+		t.Fatalf("expected 3 task updates (claim + new assignee + previous assignee), got %d: %v", len(updates), updates)
 	}
-	// The second notification goes to matt-2 (the new assignee).
+	if updates[0] != "matt-1" {
+		t.Errorf("expected matt-1 notified on claim, got %s", updates[0])
+	}
 	if updates[1] != "matt-2" {
 		t.Errorf("expected matt-2 notified on reassign, got %s", updates[1])
 	}
-	// The third notification goes to matt-1 (the previous assignee) to clear stale task.
 	if updates[2] != "matt-1" {
 		t.Errorf("expected matt-1 (previous assignee) notified on reassign, got %s", updates[2])
 	}
@@ -568,7 +570,7 @@ func TestAgents_HandleUpdated_TaskReassigned(t *testing.T) {
 
 	updates = notif.getTaskUpdates()
 	if len(updates) != 4 {
-		t.Fatalf("expected 4 task updates, got %d", len(updates))
+		t.Fatalf("expected 4 task updates, got %d: %v", len(updates), updates)
 	}
 	if updates[3] != "matt-2" {
 		t.Errorf("expected matt-2 (last assignee) notified on unclaim, got %s", updates[3])
