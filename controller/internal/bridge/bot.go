@@ -16,16 +16,12 @@ package bridge
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"gasboat/controller/internal/beadsapi"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -320,10 +316,11 @@ func (b *Bot) handleMessageEvent(ctx context.Context, ev *slackevents.MessageEve
 			return
 		}
 
-		// Forward to bound agent if this thread belongs to one.
+		// Forward to bound agent only if this is a thread-spawned agent thread.
+		// Agent card threads (status/notification threads) require an @mention.
 		// Skip messages containing @mention — those are handled by app_mention event.
 		if !isMention {
-			if agent := b.getAgentByThread(ev.Channel, ev.ThreadTimeStamp); agent != "" {
+			if agent := b.getThreadSpawnedAgent(ev.Channel, ev.ThreadTimeStamp); agent != "" {
 				b.handleThreadForward(ctx, ev, agent)
 			}
 		}
@@ -343,98 +340,8 @@ func (b *Bot) handleMessageEvent(ctx context.Context, ev *slackevents.MessageEve
 		return
 	}
 
-	// Channel-to-agent chat forwarding (bd-b0pnp).
-	b.handleChatForward(ctx, ev)
-}
-
-// handleChatForward creates a tracking bead for a Slack message directed at an agent.
-// The router's override mapping determines which channel maps to which agent.
-func (b *Bot) handleChatForward(ctx context.Context, ev *slackevents.MessageEvent) {
-	if b.router == nil {
-		return
-	}
-	agent := b.router.GetAgentByChannel(ev.Channel)
-	if agent == "" {
-		return // Not a mapped agent channel
-	}
-
-	// Skip messages that contain a bot mention — these are handled by
-	// handleAppMention via the separate app_mention event. Processing them
-	// here would create duplicate tracking beads.
-	if strings.Contains(ev.Text, fmt.Sprintf("<@%s>", b.botUserID)) {
-		return
-	}
-
-	// Resolve sender display name.
-	username := ev.User
-	if user, err := b.api.GetUserInfo(ev.User); err == nil {
-		if user.RealName != "" {
-			username = user.RealName
-		} else if user.Name != "" {
-			username = user.Name
-		}
-	}
-
-	// Build bead title (truncated) and description with slack metadata tag.
-	title := truncateText(fmt.Sprintf("Slack: %s", ev.Text), 80)
-	slackTag := fmt.Sprintf("[slack:%s:%s]", ev.Channel, ev.TimeStamp)
-	description := fmt.Sprintf("Message from %s in Slack:\n\n%s\n\n---\n%s", username, ev.Text, slackTag)
-
-	// Enrich with file attachments if present.
-	files := b.fetchMessageFiles(ctx, ev.Channel, ev.TimeStamp)
-	description += formatAttachmentsSection(files)
-
-	// Build fields JSON with attachment metadata.
-	var fieldsJSON json.RawMessage
-	if fileFields := slackFilesToFields(files); fileFields != nil {
-		fieldsJSON, _ = json.Marshal(fileFields)
-	}
-
-	// Create tracking bead assigned to the agent.
-	agentName := extractAgentName(agent)
-	beadID, err := b.daemon.CreateBead(ctx, beadsapi.CreateBeadRequest{
-		Title:       title,
-		Type:        "task",
-		Kind:        "issue",
-		Description: description,
-		Assignee:    agentName,
-		Labels:      []string{"slack-chat"},
-		Priority:    2,
-		Fields:      fieldsJSON,
-	})
-	if err != nil {
-		b.logger.Error("failed to create chat bead",
-			"channel", ev.Channel, "agent", agent, "error", err)
-		return
-	}
-
-	b.logger.Info("chat forwarding: created tracking bead",
-		"bead", beadID, "agent", agent, "user", username)
-
-	// Persist message ref for response relay.
-	if b.state != nil {
-		_ = b.state.SetChatMessage(beadID, MessageRef{
-			ChannelID: ev.Channel,
-			Timestamp: ev.TimeStamp,
-			Agent:     agent,
-		})
-	}
-
-	// Nudge the agent so it knows about the new message.
-	message := fmt.Sprintf("Slack message (bead %s): %s", beadID, truncateText(ev.Text, 200))
-	client := &http.Client{Timeout: 10 * time.Second}
-	if err := NudgeAgent(ctx, b.daemon, client, b.logger, agentName, message); err != nil {
-		b.logger.Error("failed to nudge agent for chat forward",
-			"agent", agentName, "bead", beadID, "error", err)
-	}
-
-	// Post confirmation in thread.
-	_, _, _ = b.api.PostMessage(ev.Channel,
-		slack.MsgOptionText(
-			fmt.Sprintf(":speech_balloon: Forwarded to *%s* (tracking: _%s_)", agentName, title),
-			false),
-		slack.MsgOptionTS(ev.TimeStamp),
-	)
+	// Non-mention messages in non-thread contexts are ignored.
+	// Users must @mention the bot to interact with agents.
 }
 
 // extractAgentName returns the last segment of an agent identity.

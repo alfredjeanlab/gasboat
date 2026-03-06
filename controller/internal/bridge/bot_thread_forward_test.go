@@ -12,7 +12,7 @@ import (
 	"github.com/slack-go/slack/slackevents"
 )
 
-func TestHandleMessageEvent_ThreadForward_AgentCardThread(t *testing.T) {
+func TestHandleMessageEvent_ThreadForward_AgentCardThread_NoForward(t *testing.T) {
 	daemon := newMockDaemon()
 	daemon.beads["hq"] = &beadsapi.BeadDetail{
 		ID:    "bd-agent-hq",
@@ -45,33 +45,32 @@ func TestHandleMessageEvent_ThreadForward_AgentCardThread(t *testing.T) {
 		lastThreadNudge: make(map[string]time.Time),
 	}
 
-	// Simulate a thread reply (not a mention).
+	// Simulate a thread reply (not a mention) under an agent card thread.
 	ev := &slackevents.MessageEvent{
-		User:             "U-HUMAN",
-		Channel:          "C-agents",
-		Text:             "here is the extra context you asked for",
-		TimeStamp:        "1111.3333",
-		ThreadTimeStamp:  "1111.2222",
+		User:            "U-HUMAN",
+		Channel:         "C-agents",
+		Text:            "here is the extra context you asked for",
+		TimeStamp:       "1111.3333",
+		ThreadTimeStamp: "1111.2222",
 	}
 
-	// Call handleThreadForward directly (handleMessageEvent needs Slack API for GetUserInfo).
+	// getAgentByThread still finds the agent (used for @mention routing).
 	agent := b.getAgentByThread(ev.Channel, ev.ThreadTimeStamp)
 	if agent != "hq" {
-		t.Fatalf("expected agent hq, got %q", agent)
+		t.Fatalf("expected agent hq from getAgentByThread, got %q", agent)
 	}
 
-	b.handleThreadForward(context.Background(), ev, agent)
+	// But getThreadSpawnedAgent should NOT find it (agent card, not thread-spawned).
+	spawned := b.getThreadSpawnedAgent(ev.Channel, ev.ThreadTimeStamp)
+	if spawned != "" {
+		t.Fatalf("expected empty from getThreadSpawnedAgent for agent card thread, got %q", spawned)
+	}
 
-	// Verify bead was created.
-	found := false
+	// No bead should be created for non-mention messages in agent card threads.
 	for _, bead := range daemon.beads {
-		if bead.Type == "task" && bead.Assignee == "hq" && hasLabel(bead.Labels, "slack-thread-reply") {
-			found = true
-			break
+		if hasLabel(bead.Labels, "slack-thread-reply") {
+			t.Error("should not create thread-reply bead for agent card thread without @mention")
 		}
-	}
-	if !found {
-		t.Error("expected a task bead with label slack-thread-reply assigned to hq")
 	}
 }
 
@@ -352,15 +351,15 @@ func TestHandleThreadForward_BeadAlwaysCreated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Use a thread-spawned agent (not agent card) for forwarding.
+	_ = state.SetThreadAgent("C-agents", "1111.2222", "hq")
 
 	b := &Bot{
-		daemon:    daemon,
-		state:     state,
-		logger:    slog.Default(),
-		botUserID: "U-BOT",
-		agentCards: map[string]MessageRef{
-			"hq": {ChannelID: "C-agents", Timestamp: "1111.2222", Agent: "hq"},
-		},
+		daemon:          daemon,
+		state:           state,
+		logger:          slog.Default(),
+		botUserID:       "U-BOT",
+		agentCards:      map[string]MessageRef{},
 		lastThreadNudge: make(map[string]time.Time),
 	}
 

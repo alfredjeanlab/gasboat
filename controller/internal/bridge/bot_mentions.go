@@ -196,7 +196,7 @@ func (b *Bot) handleAppMention(ctx context.Context, ev *slackevents.AppMentionEv
 
 // getAgentByThread reverse-maps (channel, thread_ts) to an agent identity
 // by checking the threadAgents map, agentCards hot cache, and falling back
-// to persisted state.
+// to persisted state. Used for @mention routing where all thread types apply.
 func (b *Bot) getAgentByThread(channelID, threadTS string) string {
 	// Check direct thread→agent mapping first (thread-spawned agents).
 	if b.state != nil {
@@ -221,6 +221,19 @@ func (b *Bot) getAgentByThread(channelID, threadTS string) string {
 			if ref.ChannelID == channelID && ref.Timestamp == threadTS {
 				return agent
 			}
+		}
+	}
+	return ""
+}
+
+// getThreadSpawnedAgent returns the agent bound to a thread only if it was
+// explicitly spawned for that thread (via SetThreadAgent). Unlike getAgentByThread,
+// this does NOT check agent card threads — those are status/notification threads
+// where casual replies should not be auto-forwarded without an @mention.
+func (b *Bot) getThreadSpawnedAgent(channelID, threadTS string) string {
+	if b.state != nil {
+		if agent, ok := b.state.GetThreadAgent(channelID, threadTS); ok {
+			return agent
 		}
 	}
 	return ""
