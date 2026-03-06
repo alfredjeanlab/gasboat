@@ -9,26 +9,87 @@
 #        --from-literal=bot-token=xoxb-... \
 #        --from-literal=app-token=xapp-... \
 #        --from-literal=signing-secret=...
-#   3. Ensure beads daemon is accessible (reuse existing or deploy separate)
+#   3. Create postgres password secret:
+#      kubectl create secret generic gasboat-test-postgres-password \
+#        --namespace gasboat-test \
+#        --from-literal=password=testpassword
+#   4. Create beads daemon token secret:
+#      kubectl create secret generic gasboat-test-beads-token \
+#        --namespace gasboat-test \
+#        --from-literal=token=test-token-change-me
 
-# Disable all components except the slack bridge.
+# Disable components not needed for testing.
 agents:
-  enabled: false
-
-beads:
   enabled: false
 
 coopmux:
   enabled: false
 
-nats:
-  enabled: false
-
-postgresql:
-  enabled: false
-
 adviceViewer:
   enabled: false
+
+beads3d:
+  enabled: false
+
+jiraBridge:
+  enabled: false
+
+gitlabBridge:
+  enabled: false
+
+landing:
+  enabled: false
+
+# External secrets not available in test namespace — use manual secrets.
+externalSecrets:
+  enabled: false
+
+registrySecrets:
+  enabled: false
+
+# Enable in-chart PostgreSQL for the beads daemon.
+postgres:
+  enabled: true
+  database: beads
+  passwordSecret: gasboat-test-postgres-password
+  persistence:
+    enabled: true
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+# Enable NATS for event-driven bridge subscriptions.
+nats:
+  enabled: true
+  replicas: 1
+  jetstream:
+    maxMemory: "64M"
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# Enable beads daemon.
+beads:
+  replicaCount: 1
+  tokenSecret: gasboat-test-beads-token
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
 
 # Enable slack bridge in test mode.
 slackBridge:
