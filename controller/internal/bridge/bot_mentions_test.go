@@ -5,8 +5,11 @@ import (
 	"log/slog"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gasboat/controller/internal/beadsapi"
+
+	"github.com/slack-go/slack/slackevents"
 )
 
 func TestStripBotMention(t *testing.T) {
@@ -449,6 +452,77 @@ func TestHandleAppMention_NonAgentThread(t *testing.T) {
 	agent := b.getAgentByThread("C-random", "9999.8888")
 	if agent != "" {
 		t.Errorf("expected empty agent for non-agent thread, got %q", agent)
+	}
+}
+
+func TestHandleAppMention_ThreadInAgentChannel_RoutesToAgent(t *testing.T) {
+	// Bug: mentioning @gasboat in a thread within an agent's break-out channel
+	// would spawn a new thread runner instead of routing to the channel's agent.
+	daemon := newMockDaemon()
+
+	// Seed an active agent bead so FindAgentBead("hq") succeeds.
+	// The mock looks up by map key, so use "hq" (the short name).
+	daemon.beads["hq"] = &beadsapi.BeadDetail{
+		ID:    "bd-agent-hq",
+		Title: "crew-gasboat-crew-hq",
+		Type:  "agent",
+		Fields: map[string]string{
+			"agent":   "hq",
+			"project": "gasboat",
+			"role":    "crew",
+		},
+	}
+
+	// Set up a router with the agent's break-out channel.
+	router := NewRouter(RouterConfig{
+		Overrides: map[string]string{
+			"gasboat/crew/hq": "C-agent-hq",
+		},
+	})
+
+	dir := t.TempDir()
+	state, err := NewStateManager(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	slackSrv := newFakeSlackServer(t)
+	defer slackSrv.Close()
+
+	b := newTestBot(daemon, slackSrv)
+	b.state = state
+	b.router = router
+	b.botUserID = "U-BOT"
+	b.lastThreadNudge = make(map[string]time.Time)
+
+	// Mention @gasboat in a thread within the agent's channel,
+	// but the thread is NOT the agent card thread (it's a random thread).
+	b.handleAppMention(context.Background(), &slackevents.AppMentionEvent{
+		User:            "U-USER",
+		Text:            "<@U-BOT> check the logs",
+		TimeStamp:       "2222.3333",
+		ThreadTimeStamp: "1111.0000", // some thread that isn't the agent's card
+		Channel:         "C-agent-hq",
+	})
+
+	// Verify that a mention bead was created for the existing agent (hq),
+	// NOT an agent bead for a new thread runner.
+	agentBeads := filterAgentBeads(daemon.beads)
+	for _, ab := range agentBeads {
+		if ab.ID != "bd-agent-hq" {
+			t.Errorf("unexpected new agent bead created: %s (%s) — should route to existing agent", ab.ID, ab.Title)
+		}
+	}
+
+	// Should have created a task bead (mention tracking) assigned to hq.
+	taskBeads := filterBeadsByType(daemon.beads, "task")
+	if len(taskBeads) == 0 {
+		t.Fatal("expected a mention tracking bead to be created")
+	}
+	for _, tb := range taskBeads {
+		if tb.Assignee != "hq" {
+			t.Errorf("mention bead assignee = %q, want %q", tb.Assignee, "hq")
+		}
 	}
 }
 
