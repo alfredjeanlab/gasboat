@@ -274,7 +274,7 @@ tasks:
       fi
       VERSION_NUM=${KD_VER#v}
       echo "Downloading kd ${KD_VER} for linux_amd64"
-      curl -fsSL "https://github.com/groblegark/kbeads/releases/download/${KD_VER}/kd-linux-x86_64.tar.gz" \
+      curl -fsSL "https://github.com/groblegark/kbeads/releases/download/${KD_VER}/kd_${VERSION_NUM}_linux_amd64.tar.gz" \
         -o /tmp/kd.tar.gz
       mkdir -p kd-bin
       tar -xzf /tmp/kd.tar.gz -C kd-bin
