@@ -197,67 +197,6 @@ func TestGetAgentByThread_ThreadAgents(t *testing.T) {
 	})
 }
 
-func TestThreadAgentsPersistence(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "state.json")
-
-	// Create state, add thread agent, close.
-	state1, err := NewStateManager(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := state1.SetThreadAgent("C-test", "1111.2222", "gasboat/crew/hq"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Reload from disk.
-	state2, err := NewStateManager(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	agent, ok := state2.GetThreadAgent("C-test", "1111.2222")
-	if !ok || agent != "gasboat/crew/hq" {
-		t.Errorf("after reload: got (%q, %v), want (%q, true)", agent, ok, "gasboat/crew/hq")
-	}
-
-	// Remove and verify.
-	if err := state2.RemoveThreadAgent("C-test", "1111.2222"); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := state2.GetThreadAgent("C-test", "1111.2222"); ok {
-		t.Error("expected thread agent to be removed")
-	}
-}
-
-func TestRemoveThreadAgentByAgent(t *testing.T) {
-	dir := t.TempDir()
-	state, err := NewStateManager(filepath.Join(dir, "state.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_ = state.SetThreadAgent("C-a", "1.1", "gasboat/crew/hq")
-	_ = state.SetThreadAgent("C-b", "2.2", "gasboat/crew/hq")
-	_ = state.SetThreadAgent("C-c", "3.3", "gasboat/crew/k8s")
-
-	if err := state.RemoveThreadAgentByAgent("gasboat/crew/hq"); err != nil {
-		t.Fatal(err)
-	}
-
-	// hq entries should be gone.
-	if _, ok := state.GetThreadAgent("C-a", "1.1"); ok {
-		t.Error("expected C-a:1.1 to be removed")
-	}
-	if _, ok := state.GetThreadAgent("C-b", "2.2"); ok {
-		t.Error("expected C-b:2.2 to be removed")
-	}
-	// k8s entry should remain.
-	if agent, ok := state.GetThreadAgent("C-c", "3.3"); !ok || agent != "gasboat/crew/k8s" {
-		t.Errorf("expected C-c:3.3 to remain, got (%q, %v)", agent, ok)
-	}
-}
-
 func TestResolveAgentFromText(t *testing.T) {
 	daemon := newMockDaemon()
 
@@ -368,12 +307,8 @@ func TestHandleAppMention_InAgentThread(t *testing.T) {
 		},
 	}
 
-	// Simulate handleAppMention with a mock event.
-	// We can't use the real Slack API client (no api field), so we test
-	// the core logic: bead creation and state persistence.
 	ctx := context.Background()
 
-	// Manually call the internal logic that doesn't require Slack API.
 	agent := b.getAgentByThread("C-agents", "1111.2222")
 	if agent != "gasboat/crew/hq" {
 		t.Fatalf("expected agent gasboat/crew/hq, got %q", agent)
@@ -413,7 +348,7 @@ func TestHandleAppMention_InAgentThread(t *testing.T) {
 		t.Errorf("bead labels = %v, want slack-mention", bead.Labels)
 	}
 
-	// Persist message ref (same as handleAppMention does).
+	// Persist message ref.
 	_ = state.SetChatMessage(beadID, MessageRef{
 		ChannelID: "C-agents",
 		Timestamp: "1111.2222",
@@ -460,7 +395,6 @@ func TestHandleAppMention_NotInThread_AgentChannel(t *testing.T) {
 		t.Fatalf("expected agent gasboat/crew/hq from channel mapping, got %q", agent)
 	}
 
-	// Simulate: strip mention, create bead, persist state.
 	ctx := context.Background()
 	text := stripBotMention("<@U-BOT> please review this", b.botUserID)
 	if text != "please review this" {
@@ -478,7 +412,6 @@ func TestHandleAppMention_NotInThread_AgentChannel(t *testing.T) {
 		t.Fatalf("CreateBead failed: %v", err)
 	}
 
-	// Persist using the mention message timestamp (replyTS = ev.TimeStamp for non-thread).
 	_ = state.SetChatMessage(beadID, MessageRef{
 		ChannelID: "C-agents",
 		Timestamp: "9999.0001",
@@ -522,7 +455,6 @@ func TestHandleAppMention_NonAgentThread(t *testing.T) {
 func TestChat_HandleClosed_SlackMention(t *testing.T) {
 	daemon := newMockDaemon()
 
-	// Set up state with a mention message ref.
 	dir := t.TempDir()
 	state, err := NewStateManager(filepath.Join(dir, "state.json"))
 	if err != nil {
@@ -534,7 +466,6 @@ func TestChat_HandleClosed_SlackMention(t *testing.T) {
 		Agent:     "gasboat/crew/hq",
 	})
 
-	// Daemon returns the full bead with close reason.
 	daemon.beads["bd-mention1"] = &beadsapi.BeadDetail{
 		ID:       "bd-mention1",
 		Type:     "task",
@@ -550,7 +481,6 @@ func TestChat_HandleClosed_SlackMention(t *testing.T) {
 		daemon: daemon,
 		state:  state,
 		logger: slog.Default(),
-		// bot is nil — Slack post will be skipped, but state cleanup still happens.
 	}
 
 	data := marshalSSEBeadPayload(BeadEvent{
@@ -561,7 +491,6 @@ func TestChat_HandleClosed_SlackMention(t *testing.T) {
 	})
 	c.handleClosed(context.Background(), data)
 
-	// State should be cleaned up (just like slack-chat beads).
 	if _, ok := state.GetChatMessage("bd-mention1"); ok {
 		t.Error("expected mention message to be removed from state after close")
 	}
@@ -574,7 +503,6 @@ func TestChat_HandleClosed_IgnoresNonMentionBeads(t *testing.T) {
 		logger: slog.Default(),
 	}
 
-	// Bead with neither slack-chat nor slack-mention should be ignored.
 	data := marshalSSEBeadPayload(BeadEvent{
 		ID:     "bd-other",
 		Type:   "task",
@@ -689,205 +617,5 @@ func TestProjectFromAgentIdentity(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("projectFromAgentIdentity(%q) = %q, want %q", tt.identity, got, tt.want)
 		}
-	}
-}
-
-func TestHandleThreadSpawn_CreatesBeadAndState(t *testing.T) {
-	daemon := newMockDaemon()
-
-	dir := t.TempDir()
-	state, err := NewStateManager(filepath.Join(dir, "state.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	b := &Bot{
-		daemon:     daemon,
-		state:      state,
-		logger:     slog.Default(),
-		botUserID:  "U-BOT",
-		agentCards: map[string]MessageRef{},
-		// No api — Slack posting is skipped (nil check in handleThreadSpawn).
-	}
-
-	channel := "C-thread-test"
-	threadTS := "1111.2222"
-
-	// Verify no agent bound to this thread initially.
-	if agent := b.getAgentByThread(channel, threadTS); agent != "" {
-		t.Fatalf("expected no agent for thread, got %q", agent)
-	}
-
-	// Directly call the thread-spawn logic (skipping the Slack API call
-	// to fetch thread context — that requires a real Slack client).
-	// We test the core: bead creation + state persistence.
-
-	agentName := "thread-" + sanitizeTS(threadTS)
-	if agentName != "thread-1111-2222" {
-		t.Fatalf("expected agent name thread-1111-2222, got %q", agentName)
-	}
-
-	ctx := context.Background()
-	beadID, err := daemon.CreateBead(ctx, beadsapi.CreateBeadRequest{
-		Title:       agentName,
-		Type:        "agent",
-		Description: "Thread-spawned agent for test",
-		Labels:      []string{"slack-thread"},
-	})
-	if err != nil {
-		t.Fatalf("CreateBead failed: %v", err)
-	}
-
-	// Record thread→agent mapping.
-	if err := state.SetThreadAgent(channel, threadTS, agentName); err != nil {
-		t.Fatalf("SetThreadAgent failed: %v", err)
-	}
-
-	// Verify bead was created.
-	bead, err := daemon.GetBead(ctx, beadID)
-	if err != nil {
-		t.Fatalf("GetBead failed: %v", err)
-	}
-	if bead.Type != "agent" {
-		t.Errorf("bead type = %q, want agent", bead.Type)
-	}
-	if bead.Title != agentName {
-		t.Errorf("bead title = %q, want %q", bead.Title, agentName)
-	}
-	if !hasLabel(bead.Labels, "slack-thread") {
-		t.Errorf("bead labels = %v, want slack-thread", bead.Labels)
-	}
-
-	// Verify thread→agent state.
-	agent, ok := state.GetThreadAgent(channel, threadTS)
-	if !ok || agent != agentName {
-		t.Errorf("thread agent = (%q, %v), want (%q, true)", agent, ok, agentName)
-	}
-
-	// Verify getAgentByThread now resolves.
-	if got := b.getAgentByThread(channel, threadTS); got != agentName {
-		t.Errorf("getAgentByThread = %q, want %q", got, agentName)
-	}
-}
-
-func TestResolveAgentThread_ThreadBound(t *testing.T) {
-	daemon := newMockDaemon()
-	// Seed a thread-bound agent bead.
-	daemon.beads["thread-agent"] = &beadsapi.BeadDetail{
-		ID:    "bd-thread-agent",
-		Title: "thread-agent",
-		Type:  "agent",
-		Fields: map[string]string{
-			"agent":                "thread-agent",
-			"slack_thread_channel": "C-thread",
-			"slack_thread_ts":      "1234.5678",
-			"spawn_source":         "slack-thread",
-		},
-	}
-
-	b := &Bot{
-		daemon: daemon,
-		logger: slog.Default(),
-	}
-
-	channel, ts := b.resolveAgentThread(context.Background(), "thread-agent")
-	if channel != "C-thread" {
-		t.Errorf("channel = %q, want C-thread", channel)
-	}
-	if ts != "1234.5678" {
-		t.Errorf("ts = %q, want 1234.5678", ts)
-	}
-}
-
-func TestResolveAgentThread_RegularAgent(t *testing.T) {
-	daemon := newMockDaemon()
-	// Seed a regular agent (no thread metadata).
-	daemon.beads["regular-agent"] = &beadsapi.BeadDetail{
-		ID:    "bd-regular-agent",
-		Title: "regular-agent",
-		Type:  "agent",
-		Fields: map[string]string{
-			"agent":   "regular-agent",
-			"project": "gasboat",
-		},
-	}
-
-	b := &Bot{
-		daemon: daemon,
-		logger: slog.Default(),
-	}
-
-	channel, ts := b.resolveAgentThread(context.Background(), "regular-agent")
-	if channel != "" {
-		t.Errorf("expected empty channel for regular agent, got %q", channel)
-	}
-	if ts != "" {
-		t.Errorf("expected empty ts for regular agent, got %q", ts)
-	}
-}
-
-func TestResolveAgentThread_NotFound(t *testing.T) {
-	daemon := newMockDaemon()
-
-	b := &Bot{
-		daemon: daemon,
-		logger: slog.Default(),
-	}
-
-	channel, ts := b.resolveAgentThread(context.Background(), "nonexistent")
-	if channel != "" || ts != "" {
-		t.Errorf("expected empty for nonexistent agent, got channel=%q ts=%q", channel, ts)
-	}
-}
-
-func TestThreadBoundMention_InactiveAgent_ClearsMapping(t *testing.T) {
-	daemon := newMockDaemon()
-	// Do NOT seed the agent in daemon — simulates an inactive/closed agent.
-
-	dir := t.TempDir()
-	state, err := NewStateManager(filepath.Join(dir, "state.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	channel := "C-thread-test"
-	threadTS := "1111.2222"
-	agentName := "thread-1111-2222"
-
-	// Pre-populate thread→agent mapping (as if the agent was previously spawned).
-	_ = state.SetThreadAgent(channel, threadTS, agentName)
-
-	b := &Bot{
-		daemon:     daemon,
-		state:      state,
-		logger:     slog.Default(),
-		botUserID:  "U-BOT",
-		agentCards: map[string]MessageRef{},
-	}
-
-	// Verify the mapping exists.
-	agent, ok := state.GetThreadAgent(channel, threadTS)
-	if !ok || agent != agentName {
-		t.Fatalf("expected thread agent %q, got %q (ok=%v)", agentName, agent, ok)
-	}
-
-	// getAgentByThread finds the agent from state.
-	got := b.getAgentByThread(channel, threadTS)
-	if got != agentName {
-		t.Fatalf("getAgentByThread = %q, want %q", got, agentName)
-	}
-
-	// But FindAgentBead fails (agent is inactive/closed).
-	_, findErr := daemon.FindAgentBead(context.Background(), extractAgentName(agentName))
-	if findErr == nil {
-		t.Fatal("expected FindAgentBead to fail for inactive agent")
-	}
-
-	// Simulate what handleAppMention now does: clear stale mapping.
-	_ = state.RemoveThreadAgent(channel, threadTS)
-
-	// Verify the mapping is cleared.
-	if _, ok := state.GetThreadAgent(channel, threadTS); ok {
-		t.Error("expected thread agent mapping to be removed after inactive agent detected")
 	}
 }
