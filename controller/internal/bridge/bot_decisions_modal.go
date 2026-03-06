@@ -19,6 +19,11 @@ func (b *Bot) handleBlockActions(ctx context.Context, callback slack.Interaction
 		actionID := action.ActionID
 
 		switch {
+		// Autodestruct confirm/cancel buttons.
+		case actionID == "autodestruct_confirm" || actionID == "autodestruct_cancel":
+			b.handleAutoDestructButtonAction(ctx, actionID, callback)
+			return
+
 		// Clear button: action_id = "clear_agent", value = agent identity.
 		case actionID == "clear_agent":
 			b.handleClearAgent(ctx, action.Value, callback)

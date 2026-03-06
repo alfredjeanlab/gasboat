@@ -32,6 +32,8 @@ func (b *Bot) handleSlashCommand(ctx context.Context, cmd slack.SlashCommand) {
 		b.handleClearThreadsCommand(ctx, cmd)
 	case "/bouncer":
 		b.handleBouncerCommand(ctx, cmd)
+	case "/autodestruct":
+		b.handleAutoDestructCommand(ctx, cmd)
 	default:
 		b.logger.Debug("unhandled slash command", "command", cmd.Command)
 	}
