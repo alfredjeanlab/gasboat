@@ -122,6 +122,7 @@ func init() {
 	rootCmd.AddCommand(pipelineCmd)
 	rootCmd.AddCommand(slackCmd)
 	rootCmd.AddCommand(squawkCmd)
+	rootCmd.AddCommand(poolCmd)
 
 	// Session Control
 	rootCmd.AddCommand(configCmd)
