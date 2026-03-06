@@ -89,7 +89,15 @@ func (b *Bot) handleAppMention(ctx context.Context, ev *slackevents.AppMentionEv
 		// In a thread — reverse-lookup which agent owns this thread.
 		agent = b.getAgentByThread(ev.Channel, ev.ThreadTimeStamp)
 		if agent == "" {
-			// Orphan thread — spawn a new ephemeral agent bound to this thread.
+			// Before spawning, check if this channel is mapped to an agent via the router.
+			// This handles @mentions in arbitrary threads within an agent's break-out channel —
+			// route to the channel's agent instead of spawning a duplicate thread runner.
+			if b.router != nil {
+				agent = b.router.GetAgentByChannel(ev.Channel)
+			}
+		}
+		if agent == "" {
+			// Orphan thread in an unmapped channel — spawn a new ephemeral agent.
 			b.handleThreadSpawn(ctx, ev, text)
 			return
 		}
