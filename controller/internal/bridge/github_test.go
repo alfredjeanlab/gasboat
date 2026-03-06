@@ -453,7 +453,7 @@ func TestMatchesPathPrefixes(t *testing.T) {
 		{"images/agent/Dockerfile", []string{"images/agent/"}, true},
 		{"images/agent/entrypoint.sh", []string{"images/agent/", ".rwx/"}, true},
 		{".rwx/docker.yml", []string{"images/agent/", ".rwx/docker.yml"}, true},
-		{".rwx/agent-versions.lock", []string{".rwx/agent-versions.lock"}, true},
+		{".rwx/agent-node.lock", []string{".rwx/agent-"}, true},
 		{"controller/cmd/controller/main.go", []string{"images/agent/"}, false},
 		{"README.md", []string{"images/agent/", ".rwx/"}, false},
 		{"images/slack-bridge/Dockerfile", []string{"images/agent/"}, false},
@@ -496,7 +496,7 @@ func TestGetImageUnreleased(t *testing.T) {
 			"files": []map[string]any{
 				{"filename": "images/agent/Dockerfile", "status": "modified"},
 				{"filename": "controller/internal/bridge/api.go", "status": "added"},
-				{"filename": ".rwx/agent-versions.lock", "status": "modified"},
+				{"filename": ".rwx/agent-node.lock", "status": "modified"},
 				{"filename": "README.md", "status": "modified"},
 			},
 		})
@@ -508,7 +508,7 @@ func TestGetImageUnreleased(t *testing.T) {
 		Name:  "agent",
 		Repo:  RepoRef{Owner: "org", Repo: "repo"},
 		Tag:   "2026.60.1",
-		Paths: []string{"images/agent/", ".rwx/agent-versions.lock"},
+		Paths: []string{"images/agent/", ".rwx/agent-"},
 	}, "main")
 
 	if result.Error != nil {
@@ -532,8 +532,8 @@ func TestGetImageUnreleased(t *testing.T) {
 	if result.Files[0] != "images/agent/Dockerfile" {
 		t.Errorf("files[0]=%q, want images/agent/Dockerfile", result.Files[0])
 	}
-	if result.Files[1] != ".rwx/agent-versions.lock" {
-		t.Errorf("files[1]=%q, want .rwx/agent-versions.lock", result.Files[1])
+	if result.Files[1] != ".rwx/agent-node.lock" {
+		t.Errorf("files[1]=%q, want .rwx/agent-node.lock", result.Files[1])
 	}
 	if len(result.Commits) != 3 {
 		t.Errorf("got %d commits, want 3", len(result.Commits))

@@ -1,0 +1,7 @@
+# Cache key for agent-install-syspackages task.
+# Touch this file to force a rebuild of system packages only.
+#
+# Versions controlled here:
+#   python=3.12, apt packages (git, curl, gcc, cmake, ffmpeg, etc.)
+cache-epoch=2
+python=3.12

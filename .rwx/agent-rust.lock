@@ -1,0 +1,4 @@
+# Cache key for agent-install-rust task.
+# Touch this file to force a rebuild of Rust toolchain only.
+cache-epoch=2
+rust-toolchain=stable

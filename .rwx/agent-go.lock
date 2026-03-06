@@ -1,0 +1,5 @@
+# Cache key for agent-install-go task.
+# Touch this file to force a rebuild of Go toolchain only.
+cache-epoch=2
+go-major=1.25
+golangci-lint=v1.64.8

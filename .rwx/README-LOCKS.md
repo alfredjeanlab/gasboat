@@ -17,6 +17,12 @@ These lock files control when cached dependencies are rebuilt:
 - **system-deps.lock** - System packages (touch weekly)
 - **e2e-system-deps.lock** - E2E system deps: aws-cli, helm, kubectl (touch to rebuild)
 - **helm-version.lock** - Helm CLI installation (touch to update version)
+- **agent-syspackages.lock** - Agent image: system packages (git, gcc, cmake, ffmpeg, etc.)
+- **agent-node.lock** - Agent image: Node.js + Claude Code
+- **agent-playwright.lock** - Agent image: Playwright + Chromium
+- **agent-go.lock** - Agent image: Go toolchain + golangci-lint
+- **agent-rust.lock** - Agent image: Rust toolchain + quench
+- **agent-clis.lock** - Agent image: CLI tools (kubectl, gh, terraform, etc.)
 
 To force a cache rebuild, simply touch the corresponding lock file:
 ```bash

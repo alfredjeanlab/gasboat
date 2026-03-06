@@ -1,0 +1,4 @@
+# Cache key for agent-install-playwright task.
+# Touch this file to force a rebuild of Playwright + Chromium only.
+cache-epoch=2
+playwright=1.58.2

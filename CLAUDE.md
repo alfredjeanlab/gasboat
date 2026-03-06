@@ -110,15 +110,16 @@ The agent image is the container that runs Claude Code agents in K8s pods. It ha
 
 ### RWX CI Architecture
 
-RWX splits the agent image into 6 parallel install tasks, each cached independently:
+RWX splits the agent image into 7 parallel install tasks, each with its own cache key:
 
 | Task | What it installs | Cache key |
 |---|---|---|
-| `agent-install-syspackages` | apt packages (git, curl, python3, gcc, ffmpeg, tmux, cmake...) | `.rwx/agent-versions.lock` |
-| `agent-install-node` | Node.js, Claude Code, Playwright, @playwright/mcp, Chromium | `.rwx/agent-versions.lock` |
-| `agent-install-go` | Go, gopls, golangci-lint, Task CLI | `.rwx/agent-versions.lock` |
-| `agent-install-rust` | Rust, rust-analyzer, quench | `.rwx/agent-versions.lock` |
-| `agent-install-clis` | kubectl, gh, glab, docker, aws, helm, terraform, terragrunt, uv, bun, rtk, whisper-cli, etc. | `.rwx/agent-versions.lock` |
+| `agent-install-syspackages` | apt packages (git, curl, python3, gcc, ffmpeg, tmux, cmake...) | `.rwx/agent-syspackages.lock` |
+| `agent-install-node` | Node.js, Claude Code | `.rwx/agent-node.lock` |
+| `agent-install-playwright` | Playwright, @playwright/mcp, Chromium, browser system deps | `.rwx/agent-playwright.lock` |
+| `agent-install-go` | Go, gopls, golangci-lint, Task CLI | `.rwx/agent-go.lock` |
+| `agent-install-rust` | Rust, rust-analyzer, quench | `.rwx/agent-rust.lock` |
+| `agent-install-clis` | kubectl, gh, glab, docker, aws, helm, terraform, terragrunt, uv, bun, rtk, whisper-cli, etc. | `.rwx/agent-clis.lock` |
 | `push-agent` (assembly) | Merges all layers + gb, coop, kd binaries → `crane append` | never cached |
 
 Each task runs in its own container on `ubuntu:24.04`. They **cannot share installed packages** — if task A installs cmake, task B cannot use it. Install dependencies locally within each task.
@@ -128,12 +129,12 @@ Each task runs in its own container on `ubuntu:24.04`. They **cannot share insta
 1. **Add to `images/agent/Dockerfile`** in the appropriate stage (`base` for essentials, `agent` for dev tools)
 2. **Add to the matching RWX install task in `.rwx/docker.yml`**:
    - apt packages → `agent-install-syspackages` (also add to dpkg copy loop and ldd binary resolution)
-   - npm packages → `agent-install-node`
+   - npm packages → `agent-install-node` (or `agent-install-playwright` for browser-related packages)
    - Go tools → `agent-install-go`
    - Rust tools → `agent-install-rust`
    - Binary downloads → `agent-install-clis`
 3. **If the tool needs build deps** (e.g. cmake for whisper-cli), install them within the same RWX task — they won't be available from other tasks
-4. **Pin versions** in `.rwx/agent-versions.lock` if applicable (changing this file busts all install task caches)
+4. **Pin versions** in the relevant `.rwx/agent-*.lock` file (each task has its own lock file — only that task's cache is busted)
 5. **Verify both build paths**:
    - Local: `make image-agent` (docker build)
    - CI: `rwx run --file .rwx/docker.yml` (or push to main)
@@ -142,7 +143,7 @@ Each task runs in its own container on `ubuntu:24.04`. They **cannot share insta
 
 1. Update the version in `images/agent/Dockerfile` (look for `ARG` lines)
 2. Update the matching version in `.rwx/docker.yml` (look in the relevant install task)
-3. If the version is in `.rwx/agent-versions.lock`, update it there (this busts all install task caches)
+3. Update the version in the relevant `.rwx/agent-*.lock` file (only that task's cache is busted)
 4. Commit, tag, push — RWX CI will rebuild
 
 ### How to Verify the Agent Image

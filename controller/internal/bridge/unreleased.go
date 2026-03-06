@@ -153,7 +153,7 @@ func DefaultGasboatImageConfigs(repo RepoRef, controllerTag, agentTag, bridgeTag
 			Name:  "agent",
 			Repo:  repo,
 			Tag:   agentTag,
-			Paths: []string{"images/agent/", ".rwx/docker.yml", ".rwx/agent-versions.lock"},
+			Paths: []string{"images/agent/", ".rwx/docker.yml", ".rwx/agent-"},
 		})
 	}
 	if controllerTag != "" {

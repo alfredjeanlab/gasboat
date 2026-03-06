@@ -226,7 +226,7 @@ func TestGetUnreleasedData_WithImages(t *testing.T) {
 				"files": []map[string]any{
 					{"filename": "images/agent/entrypoint.sh", "status": "modified"},
 					{"filename": "controller/internal/bridge/new.go", "status": "added"},
-					{"filename": ".rwx/agent-versions.lock", "status": "modified"},
+					{"filename": ".rwx/agent-node.lock", "status": "modified"},
 				},
 			})
 		default:
@@ -245,7 +245,7 @@ func TestGetUnreleasedData_WithImages(t *testing.T) {
 				Name:  "agent",
 				Repo:  RepoRef{Owner: "org", Repo: "repo"},
 				Tag:   "2026.60.1",
-				Paths: []string{"images/agent/", ".rwx/agent-versions.lock"},
+				Paths: []string{"images/agent/", ".rwx/agent-"},
 			},
 		},
 	})

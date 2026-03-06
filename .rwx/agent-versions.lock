@@ -1,7 +1,10 @@
-# Agent omnibus image version pins — changing any value busts the cache
-# for ALL agent-install-* tasks. Update versions here, not in docker.yml.
+# DEPRECATED: This file is no longer used as the RWX cache key.
+# Per-task lock files are now used instead:
+#   agent-syspackages.lock, agent-node.lock, agent-playwright.lock,
+#   agent-go.lock, agent-rust.lock, agent-clis.lock
 #
-# To force a full rebuild, bump: cache-epoch=3
+# This file is kept as a reference for all version pins.
+# To force a full rebuild, bump cache-epoch in each per-task lock file.
 
 cache-epoch=2
 

@@ -1,0 +1,9 @@
+# Cache key for agent-install-clis task.
+# Touch this file to force a rebuild of CLI tools only.
+cache-epoch=2
+docker-cli=27.5.1
+terraform=1.11.3
+terragrunt=0.77.11
+stern=1.30.0
+claudeless=v0.4.0
+rtk=v0.23.0

@@ -19,8 +19,9 @@
 # OPTIMIZATIONS:
 # - Filter directives on Go mod downloads (cached by go.mod/go.sum)
 # - Parallel builds with filter caching for dependency stability
-# - Agent image split into 6 parallel cached install tasks + 1 assembly task
-#   Cached by .rwx/agent-versions.lock — change versions there to bust cache
+# - Agent image split into 7 parallel cached install tasks + 1 assembly task
+#   Each task has its own lock file (.rwx/agent-*.lock) — only the relevant
+#   cache is busted when a version changes. See .rwx/README-LOCKS.md.
 # - Shared install-crane task eliminates redundant crane downloads (7 → 1)
 # - Parallel tar unpacking in push-agent assembly (~60s savings)
 # - Parallel CLI binary downloads in agent-install-clis (~30s savings)
@@ -462,16 +463,16 @@ tasks:
       GITHUB_USER: ${{ secrets.GITHUB_USER }}
 
   # ═══════════════════════════════════════════════════════════════════════
-  # Agent image — 6 parallel cached install tasks + 1 assembly task.
-  # All install tasks filter on .rwx/agent-versions.lock so they're
-  # cache hits when tool versions haven't changed. ~15min → ~2min.
+  # Agent image — 7 parallel cached install tasks + 1 assembly task.
+  # Each install task filters on its own .rwx/agent-*.lock file so only
+  # the relevant cache is busted when a version changes. ~15min → ~2min.
   # ═══════════════════════════════════════════════════════════════════════
 
   # ── System packages: apt-get + dpkg copy + shared libs ──────────────
   - key: agent-install-syspackages
     timeout: 10m
     filter:
-      - .rwx/agent-versions.lock
+      - .rwx/agent-syspackages.lock
     run: |
       set -e
       export DEBIAN_FRONTEND=noninteractive
@@ -579,11 +580,11 @@ tasks:
         - key: syspackages-tar
           path: syspackages.tar
 
-  # ── Node.js + Claude Code + Playwright + Chromium ───────────────────
+  # ── Node.js + Claude Code ───────────────────────────────────────────
   - key: agent-install-node
     timeout: 10m
     filter:
-      - .rwx/agent-versions.lock
+      - .rwx/agent-node.lock
     run: |
       set -e
       export DEBIAN_FRONTEND=noninteractive
@@ -600,9 +601,33 @@ tasks:
       # Claude Code
       PATH="$OUT/usr/local/bin:$PATH" npm install -g --prefix $OUT/usr/local @anthropic-ai/claude-code
 
-      # Playwright + Chromium + MCP server
+      tar -cf node-layer.tar -C $OUT .
+    outputs:
+      artifacts:
+        - key: node-tar
+          path: node-layer.tar
+
+  # ── Playwright + Chromium + system deps (cached separately) ────────
+  - key: agent-install-playwright
+    use: [agent-install-node]
+    timeout: 10m
+    filter:
+      - .rwx/agent-playwright.lock
+    run: |
+      set -e
+      export DEBIAN_FRONTEND=noninteractive
+      OUT=/tmp/playwright-layer
+
+      # Unpack the node layer so we have npm/npx available
+      mkdir -p /tmp/node-root
+      tar -xf ${{ tasks.agent-install-node.artifacts.node-tar }} -C /tmp/node-root
+      export PATH="/tmp/node-root/usr/local/bin:$PATH"
+
+      mkdir -p $OUT/usr/local
+
+      # Playwright + MCP server
       PLAYWRIGHT_VERSION=1.58.2
-      PATH="$OUT/usr/local/bin:$PATH" npm install -g --prefix $OUT/usr/local playwright@${PLAYWRIGHT_VERSION} @playwright/mcp
+      npm install -g --prefix $OUT/usr/local playwright@${PLAYWRIGHT_VERSION} @playwright/mcp
 
       # Playwright system deps
       sudo apt-get -y update
@@ -648,20 +673,21 @@ tasks:
           mkdir -p "$OUT$(dirname "$lib")" && cp -a "$lib" "$OUT${lib}" 2>/dev/null || true
         done || true
       done
-      PATH="$OUT/usr/local/bin:$PATH" PLAYWRIGHT_BROWSERS_PATH=$OUT/ms-playwright npx playwright install chromium
+      # Install Chromium browser
+      PLAYWRIGHT_BROWSERS_PATH=$OUT/ms-playwright npx playwright install chromium
       chmod -R 777 $OUT/ms-playwright
 
-      tar -cf node-layer.tar -C $OUT .
+      tar -cf playwright-layer.tar -C $OUT .
     outputs:
       artifacts:
-        - key: node-tar
-          path: node-layer.tar
+        - key: playwright-tar
+          path: playwright-layer.tar
 
   # ── Go + gopls + golangci-lint + Task CLI ───────────────────────────
   - key: agent-install-go
     timeout: 10m
     filter:
-      - .rwx/agent-versions.lock
+      - .rwx/agent-go.lock
     run: |
       set -e
       OUT=/tmp/go-layer
@@ -696,7 +722,7 @@ tasks:
   - key: agent-install-rust
     timeout: 15m
     filter:
-      - .rwx/agent-versions.lock
+      - .rwx/agent-rust.lock
     run: |
       set -e
       OUT=/tmp/rust-layer
@@ -729,7 +755,7 @@ tasks:
   - key: agent-install-clis
     timeout: 10m
     filter:
-      - .rwx/agent-versions.lock
+      - .rwx/agent-clis.lock
     run: |
       set -e
       OUT=/tmp/cli-layer
@@ -823,7 +849,7 @@ tasks:
 
   # ── Assembly: merge all layers + project binaries → push ────────────
   - key: push-agent
-    use: [code, build-gb, download-coop, download-kd, install-crane, agent-install-syspackages, agent-install-node, agent-install-go, agent-install-rust, agent-install-clis]
+    use: [code, build-gb, download-coop, download-kd, install-crane, agent-install-syspackages, agent-install-node, agent-install-playwright, agent-install-go, agent-install-rust, agent-install-clis]
     if: ${{ init.ref-name != 'pr' }}
     cache: false
     timeout: 10m
@@ -843,6 +869,7 @@ tasks:
       echo "=== Unpacking cached layers (parallel) ==="
       sudo tar -xf ${{ tasks.agent-install-syspackages.artifacts.syspackages-tar }} -C $LAYER &
       sudo tar -xf ${{ tasks.agent-install-node.artifacts.node-tar }} -C $LAYER &
+      sudo tar -xf ${{ tasks.agent-install-playwright.artifacts.playwright-tar }} -C $LAYER &
       sudo tar -xf ${{ tasks.agent-install-go.artifacts.go-tar }} -C $LAYER &
       sudo tar -xf ${{ tasks.agent-install-rust.artifacts.rust-tar }} -C $LAYER &
       sudo tar -xf ${{ tasks.agent-install-clis.artifacts.clis-tar }} -C $LAYER &
