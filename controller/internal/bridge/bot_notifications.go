@@ -18,8 +18,9 @@ func (b *Bot) NotifyAgentCrash(ctx context.Context, bead BeadEvent) error {
 	if name == "" {
 		name = bead.ID
 	}
+	displayName := b.agentDisplayName(name)
 
-	text := fmt.Sprintf(":warning: *Agent crashed: %s*", name)
+	text := fmt.Sprintf(":warning: *Agent crashed: %s*", displayName)
 
 	// Add reason from fields.
 	reason := bead.Fields["agent_state"]
@@ -38,12 +39,12 @@ func (b *Bot) NotifyAgentCrash(ctx context.Context, bead BeadEvent) error {
 			nil, nil),
 		slack.NewContextBlock("",
 			slack.NewTextBlockObject("mrkdwn",
-				fmt.Sprintf("Agent: `%s`", name), false, false)),
+				fmt.Sprintf("Agent: %s", displayName), false, false)),
 	}
 
 	targetChannel := b.resolveChannel(agent)
 	msgOpts := []slack.MsgOption{
-		slack.MsgOptionText(fmt.Sprintf("Agent crashed: %s", name), false),
+		slack.MsgOptionText(fmt.Sprintf("Agent crashed: %s", displayName), false),
 		slack.MsgOptionBlocks(blocks...),
 	}
 

@@ -181,7 +181,7 @@ func TestBuildChatResponse(t *testing.T) {
 			detail: &beadsapi.BeadDetail{
 				Fields: map[string]string{"reason": "Done!"},
 			},
-			assignee: "gasboat/crew/test-bot",
+			assignee: "test-bot",
 			contains: "test-bot",
 		},
 		{

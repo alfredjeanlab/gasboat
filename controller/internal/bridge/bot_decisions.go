@@ -40,6 +40,7 @@ func (b *Bot) NotifyDecision(ctx context.Context, bead BeadEvent) error {
 	question := decisionQuestion(bead.Fields)
 	optionsRaw := bead.Fields["options"]
 	agent := extractAgentName(bead.Assignee)
+	agentDisplay := b.agentDisplayName(agent)
 
 	// Parse options — try JSON array of objects first, then strings.
 	type optionObj struct {
@@ -102,7 +103,7 @@ func (b *Bot) NotifyDecision(ctx context.Context, bead BeadEvent) error {
 	} else if agent != "" {
 		blocks = append(blocks, slack.NewContextBlock("",
 			slack.NewTextBlockObject("mrkdwn",
-				fmt.Sprintf("Agent: `%s` | _%s_", agent, beadTitle(bead.ID, bead.Title)), false, false),
+				fmt.Sprintf("Agent: %s | _%s_", agentDisplay, beadTitle(bead.ID, bead.Title)), false, false),
 		))
 	} else {
 		blocks = append(blocks, slack.NewContextBlock("",
@@ -297,6 +298,7 @@ func (b *Bot) UpdateDecision(ctx context.Context, beadID, chosen, rationale stri
 func (b *Bot) NotifyEscalation(ctx context.Context, bead BeadEvent) error {
 	question := decisionQuestion(bead.Fields)
 	agent := extractAgentName(bead.Assignee)
+	agentDisplay := b.agentDisplayName(agent)
 
 	text := fmt.Sprintf(":rotating_light: *ESCALATED: %s*\n%s", beadTitle(bead.ID, bead.Title), question)
 
@@ -309,7 +311,7 @@ func (b *Bot) NotifyEscalation(ctx context.Context, bead BeadEvent) error {
 	// Add context — skip agent info in threaded mode since the parent card shows it.
 	contextParts := []string{fmt.Sprintf("_%s_", beadTitle(bead.ID, bead.Title))}
 	if agent != "" && !b.agentThreadingEnabled() {
-		contextParts = append([]string{fmt.Sprintf("Agent: `%s`", agent)}, contextParts...)
+		contextParts = append([]string{fmt.Sprintf("Agent: %s", agentDisplay)}, contextParts...)
 	}
 	if requestedBy := bead.Fields["requested_by"]; requestedBy != "" {
 		contextParts = append(contextParts, fmt.Sprintf("Requested by: %s", requestedBy))

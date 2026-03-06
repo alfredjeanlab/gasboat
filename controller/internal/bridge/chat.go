@@ -87,7 +87,14 @@ func (c *Chat) handleClosed(ctx context.Context, data []byte) {
 	}
 
 	// Build response text from close reason or notes.
-	response := buildChatResponse(detail, bead.Assignee)
+	agentDisplay := extractAgentName(bead.Assignee)
+	if agentDisplay == "" {
+		agentDisplay = "Agent"
+	}
+	if c.bot != nil {
+		agentDisplay = c.bot.agentDisplayName(bead.Assignee)
+	}
+	response := buildChatResponse(detail, agentDisplay)
 
 	// Post as thread reply.
 	if c.bot != nil && c.bot.api != nil {
@@ -156,10 +163,10 @@ func parseSlackMeta(text string) (channelID, messageTS string) {
 }
 
 // buildChatResponse constructs the Slack reply text from a closed bead.
-func buildChatResponse(detail *beadsapi.BeadDetail, assignee string) string {
-	agentName := extractAgentName(assignee)
-	if agentName == "" {
-		agentName = "Agent"
+// agentDisplay should be a pre-resolved display name (clickable link or plain name).
+func buildChatResponse(detail *beadsapi.BeadDetail, agentDisplay string) string {
+	if agentDisplay == "" {
+		agentDisplay = "Agent"
 	}
 
 	// Use close reason (from fields) or notes for the response body.
@@ -172,9 +179,9 @@ func buildChatResponse(detail *beadsapi.BeadDetail, assignee string) string {
 	}
 
 	if reason != "" {
-		return fmt.Sprintf(":robot_face: *%s* responded:\n\n%s", agentName, reason)
+		return fmt.Sprintf(":robot_face: *%s* responded:\n\n%s", agentDisplay, reason)
 	}
-	return fmt.Sprintf(":robot_face: *%s* completed the task (no response text).", agentName)
+	return fmt.Sprintf(":robot_face: *%s* completed the task (no response text).", agentDisplay)
 }
 
 // hasLabel checks if a label is present in a slice.
