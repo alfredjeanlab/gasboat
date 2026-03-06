@@ -19,11 +19,12 @@ func (b *Bot) agentThreadingEnabled() bool {
 	return b.threadingMode == "agent"
 }
 
-// pruneStaleAgentCards removes agent cards for agents that are no longer active.
+// pruneStaleAgentCards compresses agent cards for agents that are no longer active.
 // On bot restart, the state file may contain cards for agents that have since
 // finished (done/failed) or whose beads have been closed. This method queries the
-// daemon for currently active agents and deletes Slack messages for any cards
-// that don't correspond to an active agent.
+// daemon for currently active agents and updates Slack messages for stale cards
+// to a compact single-line format (rather than deleting them, since thread replies
+// persist and a missing parent card is confusing).
 func (b *Bot) pruneStaleAgentCards(ctx context.Context) {
 	b.mu.Lock()
 	cardCount := len(b.agentCards)
@@ -66,32 +67,35 @@ func (b *Bot) pruneStaleAgentCards(ctx context.Context) {
 		return
 	}
 
-	b.logger.Info("prune agent cards: removing stale cards",
+	b.logger.Info("prune agent cards: compressing stale cards",
 		"stale", len(stale), "total", cardCount, "active", len(activeAgents))
 
 	for _, agent := range stale {
 		b.mu.Lock()
 		ref, ok := b.agentCards[agent]
+		state := b.agentState[agent]
 		if ok {
-			delete(b.agentCards, agent)
 			delete(b.agentPending, agent)
-			delete(b.agentState, agent)
 			delete(b.agentPodName, agent)
 			delete(b.agentImageTag, agent)
 		}
 		b.mu.Unlock()
 
 		if ok {
-			// Delete the Slack message.
-			if _, _, err := b.api.DeleteMessageContext(ctx, ref.ChannelID, ref.Timestamp); err != nil {
-				b.logger.Warn("prune agent cards: failed to delete Slack message",
+			// Update the card to a compact single-line format instead of deleting.
+			if state == "" {
+				state = "done"
+			}
+			blocks := buildCompactAgentCardBlocks(agent, state)
+			_, _, _, err := b.api.UpdateMessageContext(ctx, ref.ChannelID, ref.Timestamp,
+				slack.MsgOptionText(fmt.Sprintf("Agent: %s (%s)", extractAgentName(agent), state), false),
+				slack.MsgOptionBlocks(blocks...),
+			)
+			if err != nil {
+				b.logger.Warn("prune agent cards: failed to compress Slack message",
 					"agent", agent, "error", err)
 			}
-			// Remove from persisted state.
-			if b.state != nil {
-				_ = b.state.RemoveAgentCard(agent)
-			}
-			b.logger.Info("pruned stale agent card", "agent", agent)
+			b.logger.Info("compressed stale agent card", "agent", agent)
 		}
 	}
 }
@@ -500,6 +504,40 @@ func buildAgentCardBlocks(agent string, pendingCount int, agentState, taskTitle 
 	return blocks
 }
 
+// buildCompactAgentCardBlocks constructs a single-line Block Kit card for a
+// dead/finished agent. This replaces the full multi-block card when the agent
+// is no longer active, keeping the card visible (since thread replies persist)
+// but taking minimal space. A "Clear" button allows manual removal.
+func buildCompactAgentCardBlocks(agent, agentState string) []slack.Block {
+	name := extractAgentName(agent)
+
+	var indicator string
+	switch agentState {
+	case "done":
+		indicator = ":white_check_mark:"
+	case "failed":
+		indicator = ":x:"
+	default:
+		indicator = ":white_circle:"
+	}
+
+	text := fmt.Sprintf("%s ~%s~ · %s", indicator, name, agentState)
+
+	clearBtn := slack.NewButtonBlockElement(
+		"clear_agent",
+		agent,
+		slack.NewTextBlockObject("plain_text", "Clear", false, false),
+	)
+
+	return []slack.Block{
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", text, false, false),
+			nil,
+			slack.NewAccessory(clearBtn),
+		),
+	}
+}
+
 // fetchAndCachePodName fetches the agent bead from the daemon, extracts
 // pod_name and image_tag from Notes, and caches them for coopmux terminal
 // linking and agent card display respectively.
@@ -594,24 +632,24 @@ func (b *Bot) killAgent(ctx context.Context, agentName string, force bool) error
 		return fmt.Errorf("close agent bead: %w", err)
 	}
 
-	// Remove the agent card from Slack.
+	// Compress the agent card to a compact single-line format.
 	b.mu.Lock()
 	ref, hasCard := b.agentCards[agentName]
 	if hasCard {
-		delete(b.agentCards, agentName)
 		delete(b.agentPending, agentName)
-		delete(b.agentState, agentName)
 		delete(b.agentPodName, agentName)
 		delete(b.agentImageTag, agentName)
 	}
 	b.mu.Unlock()
 
 	if hasCard {
-		if b.state != nil {
-			_ = b.state.RemoveAgentCard(agentName)
-		}
-		if _, _, err := b.api.DeleteMessageContext(ctx, ref.ChannelID, ref.Timestamp); err != nil {
-			b.logger.Error("kill agent: failed to delete card", "agent", agentName, "error", err)
+		blocks := buildCompactAgentCardBlocks(agentName, "done")
+		_, _, _, err := b.api.UpdateMessageContext(killCtx, ref.ChannelID, ref.Timestamp,
+			slack.MsgOptionText(fmt.Sprintf("Agent: %s (done)", extractAgentName(agentName)), false),
+			slack.MsgOptionBlocks(blocks...),
+		)
+		if err != nil {
+			b.logger.Error("kill agent: failed to compress card", "agent", agentName, "error", err)
 		}
 	}
 
@@ -624,17 +662,40 @@ func (b *Bot) killAgent(ctx context.Context, agentName string, force bool) error
 }
 
 // handleClearAgent handles the "Clear" button on a done/failed agent card.
-// It closes the agent bead and removes the card from Slack.
-// Clear is only invoked on already-done/failed agents, so force=true to skip
-// the graceful shutdown (coop is already gone at this point).
+// It deletes the Slack message entirely and cleans up state. This is the only
+// path that fully removes a card — kill and prune now compress cards instead.
 func (b *Bot) handleClearAgent(ctx context.Context, agentIdentity string, callback slack.InteractionCallback) {
-	if err := b.killAgent(ctx, agentIdentity, true); err != nil {
-		b.logger.Error("clear agent: failed",
-			"agent", agentIdentity, "error", err)
-		_, _ = b.api.PostEphemeral(callback.Channel.ID, callback.User.ID,
-			slack.MsgOptionText(fmt.Sprintf(":x: Failed to clear agent %q: %s", extractAgentName(agentIdentity), err.Error()), false))
-		return
+	agentIdentity = extractAgentName(agentIdentity)
+
+	b.mu.Lock()
+	ref, hasCard := b.agentCards[agentIdentity]
+	if hasCard {
+		delete(b.agentCards, agentIdentity)
+		delete(b.agentPending, agentIdentity)
+		delete(b.agentState, agentIdentity)
+		delete(b.agentPodName, agentIdentity)
+		delete(b.agentImageTag, agentIdentity)
 	}
+	b.mu.Unlock()
+
+	if hasCard {
+		if b.state != nil {
+			_ = b.state.RemoveAgentCard(agentIdentity)
+		}
+		if _, _, err := b.api.DeleteMessageContext(ctx, ref.ChannelID, ref.Timestamp); err != nil {
+			b.logger.Error("clear agent: failed to delete card",
+				"agent", agentIdentity, "error", err)
+			_, _ = b.api.PostEphemeral(callback.Channel.ID, callback.User.ID,
+				slack.MsgOptionText(fmt.Sprintf(":x: Failed to clear agent %q: %s", agentIdentity, err.Error()), false))
+			return
+		}
+	}
+
+	// Clean up any thread→agent mappings for this agent.
+	if b.state != nil {
+		_ = b.state.RemoveThreadAgentByAgent(agentIdentity)
+	}
+
 	b.logger.Info("cleared agent via Slack", "agent", agentIdentity, "user", callback.User.ID)
 }
 

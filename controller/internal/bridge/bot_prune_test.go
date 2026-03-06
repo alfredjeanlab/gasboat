@@ -13,9 +13,9 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// TestPruneStaleAgentCards_RemovesClosedAgents verifies that agent cards for
-// agents whose beads are no longer active (closed) are deleted on startup.
-func TestPruneStaleAgentCards_RemovesClosedAgents(t *testing.T) {
+// TestPruneStaleAgentCards_CompressesClosedAgents verifies that agent cards for
+// agents whose beads are no longer active (closed) are compressed on startup.
+func TestPruneStaleAgentCards_CompressesClosedAgents(t *testing.T) {
 	daemon := newMockDaemon()
 
 	// Seed one active agent (bead is open, state=working).
@@ -32,11 +32,11 @@ func TestPruneStaleAgentCards_RemovesClosedAgents(t *testing.T) {
 	}
 	// No bead for "dead-bot" — simulates a closed agent whose bead is gone.
 
-	var deletedMessages []string
+	var updatedMessages []string
 	slackSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/chat.delete" {
+		if r.URL.Path == "/chat.update" {
 			_ = r.ParseForm()
-			deletedMessages = append(deletedMessages, r.FormValue("ts"))
+			updatedMessages = append(updatedMessages, r.FormValue("ts"))
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
@@ -51,28 +51,28 @@ func TestPruneStaleAgentCards_RemovesClosedAgents(t *testing.T) {
 
 	bot.pruneStaleAgentCards(context.Background())
 
-	// Active bot's card should remain.
+	// Active bot's card should remain unchanged.
 	if _, ok := bot.agentCards["active-bot"]; !ok {
 		t.Error("active agent card should not be pruned")
 	}
 
-	// Dead bot's card should be removed.
-	if _, ok := bot.agentCards["dead-bot"]; ok {
-		t.Error("stale agent card should be pruned")
+	// Dead bot's card should still exist (compressed, not deleted).
+	if _, ok := bot.agentCards["dead-bot"]; !ok {
+		t.Error("stale agent card should be compressed, not removed")
 	}
 
-	// Slack delete should have been called for the dead bot's message.
-	if len(deletedMessages) != 1 {
-		t.Fatalf("expected 1 Slack message deleted, got %d", len(deletedMessages))
+	// Slack update should have been called for the dead bot's message.
+	if len(updatedMessages) != 1 {
+		t.Fatalf("expected 1 Slack message updated, got %d", len(updatedMessages))
 	}
-	if deletedMessages[0] != "2222.2222" {
-		t.Errorf("expected deleted timestamp 2222.2222, got %s", deletedMessages[0])
+	if updatedMessages[0] != "2222.2222" {
+		t.Errorf("expected updated timestamp 2222.2222, got %s", updatedMessages[0])
 	}
 }
 
-// TestPruneStaleAgentCards_RemovesDoneAgents verifies that agent cards for
-// agents with agent_state=done (bead still open) are pruned on restart.
-func TestPruneStaleAgentCards_RemovesDoneAgents(t *testing.T) {
+// TestPruneStaleAgentCards_CompressesDoneAgents verifies that agent cards for
+// agents with agent_state=done (bead still open) are compressed on restart.
+func TestPruneStaleAgentCards_CompressesDoneAgents(t *testing.T) {
 	daemon := newMockDaemon()
 
 	// Agent with state=done but bead still open.
@@ -106,20 +106,22 @@ func TestPruneStaleAgentCards_RemovesDoneAgents(t *testing.T) {
 	bot := newTestBot(daemon, slackSrv)
 	bot.agentCards["done-bot"] = MessageRef{ChannelID: "C123", Timestamp: "3333.3333"}
 	bot.agentCards["working-bot"] = MessageRef{ChannelID: "C123", Timestamp: "4444.4444"}
+	bot.agentState["done-bot"] = "done"
 
 	bot.pruneStaleAgentCards(context.Background())
 
-	if _, ok := bot.agentCards["done-bot"]; ok {
-		t.Error("done agent card should be pruned")
+	// Done bot's card should still exist (compressed, not deleted).
+	if _, ok := bot.agentCards["done-bot"]; !ok {
+		t.Error("done agent card should be compressed, not removed")
 	}
 	if _, ok := bot.agentCards["working-bot"]; !ok {
 		t.Error("working agent card should not be pruned")
 	}
 }
 
-// TestPruneStaleAgentCards_RemovesStopRequested verifies that agent cards for
-// agents with stop_requested set are pruned on restart.
-func TestPruneStaleAgentCards_RemovesStopRequested(t *testing.T) {
+// TestPruneStaleAgentCards_CompressesStopRequested verifies that agent cards for
+// agents with stop_requested set are compressed on restart.
+func TestPruneStaleAgentCards_CompressesStopRequested(t *testing.T) {
 	daemon := newMockDaemon()
 
 	// Agent with stop_requested but bead still open and state=working.
@@ -144,8 +146,9 @@ func TestPruneStaleAgentCards_RemovesStopRequested(t *testing.T) {
 
 	bot.pruneStaleAgentCards(context.Background())
 
-	if _, ok := bot.agentCards["stopping-bot"]; ok {
-		t.Error("stop-requested agent card should be pruned")
+	// Card should still exist (compressed, not deleted).
+	if _, ok := bot.agentCards["stopping-bot"]; !ok {
+		t.Error("stop-requested agent card should be compressed, not removed")
 	}
 }
 
@@ -332,18 +335,17 @@ func TestAgentIdentityDrift_KillAgentWithFullPath(t *testing.T) {
 	bot.agentState["kill-me"] = "working"
 	bot.agentPending["kill-me"] = 2
 
-	// Kill with full path identity — should still find and clean up the card.
+	// Kill with full path identity — should compress the card, not delete it.
 	err := bot.killAgent(context.Background(), "gasboat/crew/kill-me", true)
 	if err != nil {
 		t.Fatalf("killAgent failed: %v", err)
 	}
 
-	if _, ok := bot.agentCards["kill-me"]; ok {
-		t.Error("agent card should have been removed")
+	// Card should still exist (compressed to single line).
+	if _, ok := bot.agentCards["kill-me"]; !ok {
+		t.Error("agent card should be compressed, not removed")
 	}
-	if _, ok := bot.agentState["kill-me"]; ok {
-		t.Error("agent state should have been removed")
-	}
+	// Pending count should be cleaned up.
 	if _, ok := bot.agentPending["kill-me"]; ok {
 		t.Error("agent pending should have been removed")
 	}
