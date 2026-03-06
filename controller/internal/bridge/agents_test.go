@@ -732,6 +732,61 @@ func TestBuildAgentCardBlocks_NoImageTag(t *testing.T) {
 	}
 }
 
+func TestBuildWrapUpAgentCardBlocks_Done(t *testing.T) {
+	wrapupJSON := `{"accomplishments":"Closed 3 bugs","blockers":"API key pending"}`
+	blocks := buildWrapUpAgentCardBlocks("gasboat/crew/test-bot", "done", wrapupJSON)
+
+	// Should have 3 blocks: header, wrapup section, action (Clear button).
+	if len(blocks) != 3 {
+		t.Fatalf("expected 3 blocks, got %d", len(blocks))
+	}
+
+	// First block: header with agent name and state.
+	header := blocks[0].(*slack.SectionBlock)
+	if !strings.Contains(header.Text.Text, "test-bot") {
+		t.Errorf("expected agent name in header, got: %s", header.Text.Text)
+	}
+	if !strings.Contains(header.Text.Text, ":white_check_mark:") {
+		t.Errorf("expected done indicator in header, got: %s", header.Text.Text)
+	}
+	if !strings.Contains(header.Text.Text, "done") {
+		t.Errorf("expected 'done' state in header, got: %s", header.Text.Text)
+	}
+
+	// Second block: wrapup content.
+	wrapup := blocks[1].(*slack.SectionBlock)
+	if !strings.Contains(wrapup.Text.Text, "Accomplishments") {
+		t.Errorf("expected accomplishments in wrapup block, got: %s", wrapup.Text.Text)
+	}
+	if !strings.Contains(wrapup.Text.Text, "Blockers") {
+		t.Errorf("expected blockers in wrapup block, got: %s", wrapup.Text.Text)
+	}
+
+	// Third block: action with Clear button.
+	if blocks[2].BlockType() != "actions" {
+		t.Errorf("expected actions block at index 2, got %q", blocks[2].BlockType())
+	}
+}
+
+func TestBuildWrapUpAgentCardBlocks_Failed(t *testing.T) {
+	wrapupJSON := `{"accomplishments":"Partial work done"}`
+	blocks := buildWrapUpAgentCardBlocks("test-bot", "failed", wrapupJSON)
+
+	header := blocks[0].(*slack.SectionBlock)
+	if !strings.Contains(header.Text.Text, ":x:") {
+		t.Errorf("expected failed indicator in header, got: %s", header.Text.Text)
+	}
+}
+
+func TestBuildWrapUpAgentCardBlocks_EmptyWrapUp(t *testing.T) {
+	blocks := buildWrapUpAgentCardBlocks("test-bot", "done", `{}`)
+
+	// Empty wrapup: header + action only (no wrapup section block).
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 blocks for empty wrapup, got %d", len(blocks))
+	}
+}
+
 func TestFormatWrapUpSlack_FullWrapUp(t *testing.T) {
 	wrapupJSON := `{"accomplishments":"Closed 3 bugs","blockers":"API key pending","handoff_notes":"Check PR #42","beads_closed":["kd-1","kd-2"],"pull_requests":["https://github.com/org/repo/pull/42"]}`
 	result := formatWrapUpSlack(wrapupJSON)

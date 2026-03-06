@@ -1,42 +1,10 @@
 package bridge
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	"github.com/slack-go/slack"
 )
-
-// postCardWrapUpReply posts the agent's wrapup summary as a thread reply on the
-// agent's status card. This ensures the closeout message is visible in Slack
-// for card-based agents (non-thread-bound).
-func (b *Bot) postCardWrapUpReply(ctx context.Context, agent string, bead BeadEvent) {
-	b.mu.Lock()
-	ref, ok := b.agentCards[agent]
-	b.mu.Unlock()
-	if !ok {
-		return
-	}
-
-	wrapupJSON := bead.Fields["wrapup"]
-	if wrapupJSON == "" {
-		return
-	}
-
-	text := fmt.Sprintf(":memo: *Wrap-up from %s*", agent)
-	text += formatWrapUpSlack(wrapupJSON)
-
-	_, _, err := b.api.PostMessageContext(ctx, ref.ChannelID,
-		slack.MsgOptionText(text, false),
-		slack.MsgOptionTS(ref.Timestamp),
-	)
-	if err != nil {
-		b.logger.Error("failed to post card wrapup reply",
-			"agent", agent, "error", err)
-	}
-}
 
 // formatWrapUpSlack parses a structured wrapup JSON string and renders it as
 // a Slack-formatted text block. Returns an empty string if parsing fails.

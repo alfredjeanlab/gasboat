@@ -300,11 +300,12 @@ func (b *Bot) NotifyAgentState(_ context.Context, bead BeadEvent) {
 	// Refresh the card if one exists for this agent.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	b.updateAgentCard(ctx, agent)
 
-	// Post wrapup as a thread reply on the agent card for terminal states.
+	// For terminal states with a wrapup, replace the card with the wrapup summary.
 	if (state == "done" || state == "failed") && bead.Fields["wrapup"] != "" {
-		b.postCardWrapUpReply(ctx, agent, bead)
+		b.replaceAgentCardWithWrapUp(ctx, agent, state, bead.Fields["wrapup"])
+	} else {
+		b.updateAgentCard(ctx, agent)
 	}
 }
 
@@ -428,6 +429,75 @@ func (b *Bot) updateAgentCard(ctx context.Context, agent string) {
 	if err != nil {
 		b.logger.Error("failed to update agent card", "agent", agent, "error", err)
 	}
+}
+
+// replaceAgentCardWithWrapUp updates the agent card in-place with the wrap-up
+// summary instead of posting it as a thread reply. The card is replaced with a
+// compact block showing the agent name, terminal state, and wrapup content.
+func (b *Bot) replaceAgentCardWithWrapUp(ctx context.Context, agent, state, wrapupJSON string) {
+	b.mu.Lock()
+	ref, ok := b.agentCards[agent]
+	b.mu.Unlock()
+
+	if !ok {
+		// No card — fall back to regular update (which may create one).
+		b.updateAgentCard(ctx, agent)
+		return
+	}
+
+	blocks := buildWrapUpAgentCardBlocks(agent, state, wrapupJSON)
+	_, _, _, err := b.api.UpdateMessageContext(ctx, ref.ChannelID, ref.Timestamp,
+		slack.MsgOptionText(fmt.Sprintf("Agent: %s (%s)", extractAgentName(agent), state), false),
+		slack.MsgOptionBlocks(blocks...),
+	)
+	if err != nil {
+		b.logger.Error("failed to replace agent card with wrapup",
+			"agent", agent, "error", err)
+	}
+}
+
+// buildWrapUpAgentCardBlocks constructs Block Kit blocks that replace the agent
+// card with a wrap-up summary. The header shows the agent name and terminal
+// state, followed by the wrapup content in a section block that Slack can
+// truncate, and a Clear button for dismissal.
+func buildWrapUpAgentCardBlocks(agent, agentState, wrapupJSON string) []slack.Block {
+	name := extractAgentName(agent)
+
+	var indicator string
+	switch agentState {
+	case "done":
+		indicator = ":white_check_mark:"
+	case "failed":
+		indicator = ":x:"
+	default:
+		indicator = ":white_circle:"
+	}
+
+	headerText := fmt.Sprintf("%s *%s* · %s", indicator, name, agentState)
+	wrapupText := formatWrapUpSlack(wrapupJSON)
+
+	blocks := []slack.Block{
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", headerText, false, false),
+			nil, nil),
+	}
+
+	if wrapupText != "" {
+		blocks = append(blocks,
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn", wrapupText, false, false),
+				nil, nil),
+		)
+	}
+
+	clearBtn := slack.NewButtonBlockElement(
+		"clear_agent",
+		agent,
+		slack.NewTextBlockObject("plain_text", "Clear", false, false),
+	)
+	blocks = append(blocks, slack.NewActionBlock("", clearBtn))
+
+	return blocks
 }
 
 // buildAgentCardBlocks constructs Block Kit blocks for an agent status card.
