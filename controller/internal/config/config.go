@@ -72,6 +72,22 @@ type Config struct {
 	// 0 means no rate limiting. Default: 20.
 	CoopRateLimitMax int
 
+	// CoopCircuitBreakerThreshold is the max pod creations within
+	// CoopCircuitBreakerWindow before the circuit breaker trips and halts
+	// all creation until cooldown elapses (env: COOP_CIRCUIT_BREAKER_THRESHOLD).
+	// 0 means disabled. Default: 20.
+	CoopCircuitBreakerThreshold int
+
+	// CoopCircuitBreakerWindow is the rolling window over which creations
+	// are counted for the circuit breaker (env: COOP_CIRCUIT_BREAKER_WINDOW).
+	// Default: 2m.
+	CoopCircuitBreakerWindow time.Duration
+
+	// CoopCircuitBreakerCooldown is how long the circuit breaker stays open
+	// after tripping before auto-resetting (env: COOP_CIRCUIT_BREAKER_COOLDOWN).
+	// Default: 5m.
+	CoopCircuitBreakerCooldown time.Duration
+
 	// CoopBurstLimit is the maximum number of pods to create in a single
 	// reconciliation pass (env: COOP_BURST_LIMIT). Default: 3.
 	// This prevents memory pressure from simultaneous pod initialization.
@@ -266,6 +282,9 @@ func Parse() *Config {
 		CoopBurstLimit:      envIntOr("COOP_BURST_LIMIT", 3),
 		CoopRateLimitWindow: envDurationOr("COOP_RATE_LIMIT_WINDOW", 5*time.Minute),
 		CoopRateLimitMax:    envIntOr("COOP_RATE_LIMIT_MAX", 20),
+		CoopCircuitBreakerThreshold: envIntOr("COOP_CIRCUIT_BREAKER_THRESHOLD", 20),
+		CoopCircuitBreakerWindow:    envDurationOr("COOP_CIRCUIT_BREAKER_WINDOW", 2*time.Minute),
+		CoopCircuitBreakerCooldown:  envDurationOr("COOP_CIRCUIT_BREAKER_COOLDOWN", 5*time.Minute),
 		CoopSyncInterval:   envDurationOr("COOP_SYNC_INTERVAL", 60*time.Second),
 		AgentStorageClass:  os.Getenv("AGENT_STORAGE_CLASS"),
 		ClaudeModel:             os.Getenv("CLAUDE_MODEL"),

@@ -34,6 +34,7 @@ type Reconciler struct {
 	upgradeTracker *UpgradeTracker
 	destructed     atomic.Bool
 	rateLimiter    *CreationRateLimiter
+	circuitBreaker *CircuitBreaker
 }
 
 // New creates a Reconciler.
@@ -53,6 +54,7 @@ func New(
 		digestTracker:  NewImageDigestTracker(logger),
 		upgradeTracker: NewUpgradeTracker(logger),
 		rateLimiter:    NewCreationRateLimiter(cfg.CoopRateLimitMax, cfg.CoopRateLimitWindow),
+		circuitBreaker: NewCircuitBreaker(cfg.CoopCircuitBreakerThreshold, cfg.CoopCircuitBreakerWindow, cfg.CoopCircuitBreakerCooldown),
 	}
 }
 
@@ -83,6 +85,23 @@ func (r *Reconciler) IsDestructed() bool {
 	return r.destructed.Load()
 }
 
+// CircuitBreakerOpen returns true if the circuit breaker is currently tripped.
+func (r *Reconciler) CircuitBreakerOpen() bool {
+	if r.circuitBreaker == nil {
+		return false
+	}
+	return r.circuitBreaker.IsOpen()
+}
+
+// ResetCircuitBreaker manually clears the circuit breaker, resuming pod creation.
+func (r *Reconciler) ResetCircuitBreaker(actor string) {
+	if r.circuitBreaker == nil {
+		return
+	}
+	r.circuitBreaker.Reset()
+	r.logger.Warn("circuit breaker manually reset", "actor", actor)
+}
+
 // Reconcile performs a single reconciliation pass:
 // 1. List desired beads from daemon
 // 2. List actual pods from K8s
@@ -93,6 +112,11 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 
 	if r.destructed.Load() {
 		r.logger.Info("autodestruct active, skipping reconciliation")
+		return nil
+	}
+
+	if r.circuitBreaker != nil && r.circuitBreaker.IsOpen() {
+		r.logger.Warn("circuit breaker open, skipping pod creation this pass")
 		return nil
 	}
 
@@ -284,6 +308,9 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		}
 		if r.rateLimiter != nil {
 			r.rateLimiter.Record()
+		}
+		if r.circuitBreaker != nil {
+			r.circuitBreaker.Record()
 		}
 		created++
 		activePods++
