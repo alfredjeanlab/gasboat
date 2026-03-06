@@ -65,6 +65,8 @@ spec:
   ipWhiteList:
     sourceRange:
       {{- toYaml .Values.adviceViewer.ingress.ipWhitelist.sourceRange | nindent 6 }}
+    ipStrategy:
+      depth: {{ .Values.adviceViewer.ingress.ipWhitelist.depth | default 1 }}
 {{- end }}
 {{- if .Values.adviceViewer.ingress.basicAuth.enabled }}
 ---

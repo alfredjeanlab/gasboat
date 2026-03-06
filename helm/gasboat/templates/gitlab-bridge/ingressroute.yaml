@@ -62,5 +62,7 @@ spec:
   ipWhiteList:
     sourceRange:
       {{- toYaml .Values.gitlabBridge.ingress.ipWhitelist.sourceRange | nindent 6 }}
+    ipStrategy:
+      depth: {{ .Values.gitlabBridge.ingress.ipWhitelist.depth | default 1 }}
 {{- end }}
 {{- end }}

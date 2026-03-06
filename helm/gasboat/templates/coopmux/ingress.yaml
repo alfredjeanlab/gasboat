@@ -98,6 +98,8 @@ spec:
   ipWhiteList:
     sourceRange:
       {{- toYaml .Values.coopmux.ingress.ipWhitelist.sourceRange | nindent 6 }}
+    ipStrategy:
+      depth: {{ .Values.coopmux.ingress.ipWhitelist.depth | default 1 }}
 {{- end }}
 {{- if .Values.coopmux.ingress.basicAuth.enabled }}
 ---

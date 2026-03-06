@@ -65,6 +65,8 @@ spec:
   ipWhiteList:
     sourceRange:
       {{- toYaml .Values.slackBridge.ingress.ipWhitelist.sourceRange | nindent 6 }}
+    ipStrategy:
+      depth: {{ .Values.slackBridge.ingress.ipWhitelist.depth | default 1 }}
 {{- end }}
 {{- if .Values.slackBridge.ingress.basicAuth.enabled }}
 ---

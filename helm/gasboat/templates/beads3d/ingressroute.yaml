@@ -64,6 +64,8 @@ spec:
   ipWhiteList:
     sourceRange:
       {{- toYaml .Values.beads3d.ingress.ipWhitelist.sourceRange | nindent 6 }}
+    ipStrategy:
+      depth: {{ .Values.beads3d.ingress.ipWhitelist.depth | default 1 }}
 {{- end }}
 {{- if .Values.beads3d.ingress.basicAuth.enabled }}
 ---
