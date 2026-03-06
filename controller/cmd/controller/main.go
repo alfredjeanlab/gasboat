@@ -33,6 +33,7 @@ import (
 	"gasboat/controller/internal/bridge"
 	"gasboat/controller/internal/config"
 	"gasboat/controller/internal/podmanager"
+	"gasboat/controller/internal/poolmanager"
 	"gasboat/controller/internal/reconciler"
 	"gasboat/controller/internal/secretreconciler"
 	"gasboat/controller/internal/statusreporter"
@@ -250,6 +251,12 @@ func run(ctx context.Context, logger *slog.Logger, cfg *config.Config, k8sClient
 		}()
 	}
 	go runPeriodicSync(ctx, logger, status, rec, daemon, cfg, syncInterval, secretRec)
+
+	// Start prewarmed agent pool manager if enabled.
+	if cfg.PrewarmedPoolEnabled {
+		pool := poolmanager.New(daemon, cfg, logger.With("component", "poolmanager"))
+		go pool.RunLoop(ctx)
+	}
 
 	logger.Info("controller ready, waiting for beads events",
 		"sync_interval", syncInterval)
