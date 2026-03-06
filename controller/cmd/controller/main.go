@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -136,6 +138,8 @@ func main() {
 			"namespace":  cfg.Namespace,
 		})
 	})
+	registerAutodestructEndpoints(healthMux, rec, logger)
+
 	healthSrv := &http.Server{
 		Addr:              healthAddr,
 		Handler:           healthMux,
@@ -483,4 +487,80 @@ func truncForLog(s string) string {
 		return s[:19]
 	}
 	return s
+}
+
+// registerAutodestructEndpoints adds the autodestruct HTTP endpoints to the mux.
+func registerAutodestructEndpoints(mux *http.ServeMux, rec *reconciler.Reconciler, logger *slog.Logger) {
+	token := os.Getenv("AUTODESTRUCT_TOKEN")
+
+	requireAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if token == "" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"error": "autodestruct not configured",
+				})
+				return
+			}
+			auth := r.Header.Get("Authorization")
+			provided := strings.TrimPrefix(auth, "Bearer ")
+			if provided == auth || subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+				return
+			}
+			next(w, r)
+		}
+	}
+
+	mux.HandleFunc("POST /autodestruct", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		actor := r.Header.Get("X-Actor")
+		if actor == "" {
+			actor = "unknown"
+		}
+		killed, err := rec.Autodestruct(r.Context(), actor)
+		if err != nil {
+			logger.Error("autodestruct failed", "error", err, "actor", actor)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		logger.Warn("autodestruct triggered via HTTP", "actor", actor, "killed", killed)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":    "destructed",
+			"killed":    killed,
+			"actor":     actor,
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
+		})
+	}))
+
+	mux.HandleFunc("POST /autodestruct/clear", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		actor := r.Header.Get("X-Actor")
+		if actor == "" {
+			actor = "unknown"
+		}
+		rec.ClearAutodestruct(actor)
+		logger.Warn("autodestruct cleared via HTTP", "actor", actor)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":    "cleared",
+			"actor":     actor,
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
+		})
+	}))
+
+	mux.HandleFunc("GET /autodestruct/status", requireAuth(func(w http.ResponseWriter, _ *http.Request) {
+		status := "active"
+		if !rec.IsDestructed() {
+			status = "inactive"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status": status,
+		})
+	}))
 }

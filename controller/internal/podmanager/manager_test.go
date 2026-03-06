@@ -252,3 +252,67 @@ func TestGetAgentPod_NotFound(t *testing.T) {
 		t.Error("expected error for nonexistent pod")
 	}
 }
+
+// ── DeleteAllAgentPods ──────────────────────────────────────────────────────
+
+func TestDeleteAllAgentPods(t *testing.T) {
+	client := fake.NewClientset()
+	m := New(client, slog.Default())
+
+	for _, name := range []string{"a-1", "a-2", "a-3"} {
+		spec := minimalSpec()
+		spec.AgentName = name
+		if err := m.CreateAgentPod(context.Background(), spec); err != nil {
+			t.Fatalf("create pod %s: %v", name, err)
+		}
+	}
+
+	deleted, err := m.DeleteAllAgentPods(context.Background(), "default", false)
+	if err != nil {
+		t.Fatalf("DeleteAllAgentPods: %v", err)
+	}
+	if deleted != 3 {
+		t.Errorf("deleted = %d, want 3", deleted)
+	}
+
+	pods, _ := m.ListAgentPods(context.Background(), "default", map[string]string{LabelApp: LabelAppValue})
+	if len(pods) != 0 {
+		t.Errorf("expected 0 pods remaining, got %d", len(pods))
+	}
+}
+
+func TestDeleteAllAgentPods_Force(t *testing.T) {
+	client := fake.NewClientset()
+	m := New(client, slog.Default())
+
+	spec := minimalSpec()
+	if err := m.CreateAgentPod(context.Background(), spec); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	deleted, err := m.DeleteAllAgentPods(context.Background(), "default", true)
+	if err != nil {
+		t.Fatalf("DeleteAllAgentPods force: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("deleted = %d, want 1", deleted)
+	}
+
+	pods, _ := m.ListAgentPods(context.Background(), "default", map[string]string{LabelApp: LabelAppValue})
+	if len(pods) != 0 {
+		t.Errorf("expected 0 pods remaining, got %d", len(pods))
+	}
+}
+
+func TestDeleteAllAgentPods_NoPods(t *testing.T) {
+	client := fake.NewClientset()
+	m := New(client, slog.Default())
+
+	deleted, err := m.DeleteAllAgentPods(context.Background(), "default", false)
+	if err != nil {
+		t.Fatalf("DeleteAllAgentPods empty: %v", err)
+	}
+	if deleted != 0 {
+		t.Errorf("deleted = %d, want 0", deleted)
+	}
+}

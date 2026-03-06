@@ -29,14 +29,18 @@ func (m *mockLister) ListAgentBeads(_ context.Context) ([]beadsapi.AgentBead, er
 
 // mockManager implements podmanager.Manager, recording all calls.
 type mockManager struct {
-	pods       []corev1.Pod
-	listErr    error
-	createErr  error
-	deleteErr  error
-	created    []podmanager.AgentPodSpec
-	deleted    []string // pod names
-	getResult  *corev1.Pod
-	getErr     error
+	pods             []corev1.Pod
+	listErr          error
+	createErr        error
+	deleteErr        error
+	created          []podmanager.AgentPodSpec
+	deleted          []string // pod names
+	getResult        *corev1.Pod
+	getErr           error
+	deleteAllCalled  bool
+	deleteAllForce   bool
+	deleteAllResult  int
+	deleteAllErr     error
 }
 
 func (m *mockManager) CreateAgentPod(_ context.Context, spec podmanager.AgentPodSpec) error {
@@ -47,6 +51,12 @@ func (m *mockManager) CreateAgentPod(_ context.Context, spec podmanager.AgentPod
 func (m *mockManager) DeleteAgentPod(_ context.Context, name, _ string) error {
 	m.deleted = append(m.deleted, name)
 	return m.deleteErr
+}
+
+func (m *mockManager) DeleteAllAgentPods(_ context.Context, _ string, force bool) (int, error) {
+	m.deleteAllCalled = true
+	m.deleteAllForce = force
+	return m.deleteAllResult, m.deleteAllErr
 }
 
 func (m *mockManager) ListAgentPods(_ context.Context, _ string, _ map[string]string) ([]corev1.Pod, error) {
@@ -426,5 +436,75 @@ func TestReconcile_MaxPods_CapsActiveCount(t *testing.T) {
 	// 2 active + 1 new = 3 (the max). Should only create 1.
 	if len(mgr.created) != 1 {
 		t.Errorf("expected 1 pod created (max pods cap), got %d", len(mgr.created))
+	}
+}
+
+// ── Autodestruct ────────────────────────────────────────────────────────────
+
+func TestAutodestruct(t *testing.T) {
+	mgr := &mockManager{deleteAllResult: 5}
+	lister := &mockLister{}
+	r := New(lister, mgr, testConfig("ns"), testLogger(), simpleSpecBuilder("img:v1"))
+
+	deleted, err := r.Autodestruct(context.Background(), "operator")
+	if err != nil {
+		t.Fatalf("Autodestruct: %v", err)
+	}
+	if deleted != 5 {
+		t.Errorf("deleted = %d, want 5", deleted)
+	}
+	if !mgr.deleteAllCalled {
+		t.Error("expected DeleteAllAgentPods to be called")
+	}
+	if !mgr.deleteAllForce {
+		t.Error("expected force=true")
+	}
+	if !r.IsDestructed() {
+		t.Error("expected IsDestructed() = true after Autodestruct")
+	}
+}
+
+func TestReconcile_SkipsWhenDestructed(t *testing.T) {
+	mgr := &mockManager{deleteAllResult: 0}
+	lister := &mockLister{beads: []beadsapi.AgentBead{
+		{ID: "b1", Project: "gasboat", Mode: "crew", Role: "dev", AgentName: "a1"},
+	}}
+	r := New(lister, mgr, testConfig("ns"), testLogger(), simpleSpecBuilder("img:v1"))
+
+	// Activate autodestruct.
+	_, _ = r.Autodestruct(context.Background(), "test")
+
+	// Reconcile should be a no-op.
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(mgr.created) != 0 {
+		t.Errorf("expected 0 pods created during autodestruct, got %d", len(mgr.created))
+	}
+}
+
+func TestClearAutodestruct(t *testing.T) {
+	mgr := &mockManager{deleteAllResult: 0}
+	lister := &mockLister{}
+	r := New(lister, mgr, testConfig("ns"), testLogger(), simpleSpecBuilder("img:v1"))
+
+	_, _ = r.Autodestruct(context.Background(), "operator")
+	if !r.IsDestructed() {
+		t.Fatal("expected IsDestructed() = true")
+	}
+
+	r.ClearAutodestruct("operator")
+	if r.IsDestructed() {
+		t.Error("expected IsDestructed() = false after ClearAutodestruct")
+	}
+}
+
+func TestIsDestructed_DefaultFalse(t *testing.T) {
+	mgr := &mockManager{}
+	lister := &mockLister{}
+	r := New(lister, mgr, testConfig("ns"), testLogger(), simpleSpecBuilder("img:v1"))
+
+	if r.IsDestructed() {
+		t.Error("expected IsDestructed() = false by default")
 	}
 }

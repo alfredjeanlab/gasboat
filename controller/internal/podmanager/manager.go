@@ -5,6 +5,7 @@ package podmanager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -196,6 +197,7 @@ func (s *AgentPodSpec) Labels() map[string]string {
 type Manager interface {
 	CreateAgentPod(ctx context.Context, spec AgentPodSpec) error
 	DeleteAgentPod(ctx context.Context, name, namespace string) error
+	DeleteAllAgentPods(ctx context.Context, namespace string, force bool) (int, error)
 	ListAgentPods(ctx context.Context, namespace string, labelSelector map[string]string) ([]corev1.Pod, error)
 	GetAgentPod(ctx context.Context, name, namespace string) (*corev1.Pod, error)
 }
@@ -291,6 +293,47 @@ func (m *K8sManager) DeleteAgentPod(ctx context.Context, name, namespace string)
 		return nil
 	}
 	return err
+}
+
+// DeleteAllAgentPods deletes all pods matching the app.kubernetes.io/name=gasboat
+// label in the given namespace. When force is true, pods are deleted with
+// GracePeriodSeconds=0 and PropagationPolicy=Background for immediate termination.
+// Returns the number of pods deleted and any aggregated errors.
+func (m *K8sManager) DeleteAllAgentPods(ctx context.Context, namespace string, force bool) (int, error) {
+	pods, err := m.ListAgentPods(ctx, namespace, map[string]string{
+		LabelApp: LabelAppValue,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("listing agent pods: %w", err)
+	}
+
+	var (
+		deleted int
+		errs    []error
+	)
+
+	opts := metav1.DeleteOptions{}
+	if force {
+		zero := int64(0)
+		bg := metav1.DeletePropagationBackground
+		opts.GracePeriodSeconds = &zero
+		opts.PropagationPolicy = &bg
+	}
+
+	for _, pod := range pods {
+		m.logger.Warn("deleting agent pod", "pod", pod.Name, "namespace", namespace, "force", force)
+		err := m.client.CoreV1().Pods(namespace).Delete(ctx, pod.Name, opts)
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("deleting pod %s: %w", pod.Name, err))
+			continue
+		}
+		deleted++
+	}
+
+	return deleted, errors.Join(errs...)
 }
 
 // ListAgentPods lists pods matching the given labels.

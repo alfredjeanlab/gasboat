@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -31,6 +32,7 @@ type Reconciler struct {
 	mu             sync.Mutex // prevent concurrent reconciles
 	digestTracker  *ImageDigestTracker
 	upgradeTracker *UpgradeTracker
+	destructed     atomic.Bool
 }
 
 // New creates a Reconciler.
@@ -58,6 +60,27 @@ func (r *Reconciler) DigestTracker() *ImageDigestTracker {
 	return r.digestTracker
 }
 
+// Autodestruct sets the autodestruct flag, force-deletes all agent pods, and
+// returns the number of pods deleted. While the flag is set, Reconcile() is a
+// no-op so deleted pods are not recreated.
+func (r *Reconciler) Autodestruct(ctx context.Context, actor string) (int, error) {
+	r.destructed.Store(true)
+	r.logger.Warn("autodestruct activated", "actor", actor)
+	return r.pods.DeleteAllAgentPods(ctx, r.cfg.Namespace, true)
+}
+
+// ClearAutodestruct clears the autodestruct flag, allowing Reconcile() to
+// resume normal operation.
+func (r *Reconciler) ClearAutodestruct(actor string) {
+	r.destructed.Store(false)
+	r.logger.Warn("autodestruct cleared", "actor", actor)
+}
+
+// IsDestructed returns true if autodestruct is active.
+func (r *Reconciler) IsDestructed() bool {
+	return r.destructed.Load()
+}
+
 // Reconcile performs a single reconciliation pass:
 // 1. List desired beads from daemon
 // 2. List actual pods from K8s
@@ -65,6 +88,11 @@ func (r *Reconciler) DigestTracker() *ImageDigestTracker {
 func (r *Reconciler) Reconcile(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.destructed.Load() {
+		r.logger.Info("autodestruct active, skipping reconciliation")
+		return nil
+	}
 
 	// Get desired state from daemon.
 	beads, err := r.lister.ListAgentBeads(ctx)
