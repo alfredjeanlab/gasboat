@@ -78,6 +78,11 @@ var configCategories = []ConfigCategory{
 		Strategy:    MergeOverride,
 		Description: "Wrap-up message requirements for gb stop (required fields, enforcement level, custom fields)",
 	},
+	{
+		Name:        "nudge-prompts",
+		Strategy:    MergeOverride,
+		Description: "Nudge prompt templates for agent startup (thread, adhoc, default, prewarmed)",
+	},
 }
 
 // configCategoryMap provides O(1) lookup by category name.

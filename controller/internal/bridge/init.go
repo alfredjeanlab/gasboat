@@ -161,6 +161,10 @@ func configs() map[string]any {
 				// Prewarmed pool configuration (JSON):
 				// {"enabled":bool, "mode":"job"|"crew", "role":"thread", "min_size":int, "max_size":int}
 				{Name: "prewarmed_pool", Type: "json"},
+				// Nudge prompt templates (JSON): role-keyed map of prompt strings.
+				// Keys: "thread", "adhoc", "default", "prewarmed".
+				// Supports {{.Project}}, {{.ProjectHint}}, {{.TaskHint}}, {{.MonorepoHint}}, {{.BoatPrompt}} placeholders.
+				{Name: "nudge_prompts", Type: "json"},
 			},
 		},
 

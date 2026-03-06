@@ -464,46 +464,43 @@ inject_initial_prompt() {
         fi
     done
 
-    # Build a project-scoped initial prompt that prevents parallel pickup of the
-    # same task by multiple agents.  Three key rules are injected:
-    #   1. Check gb news first to see what teammates are already working on.
-    #   2. Prefer tasks that match this agent's project (${PROJECT}).
-    #   3. kd claim <id> BEFORE starting work so no other agent can pick the same task.
-    local project_hint=""
-    if [ -n "${PROJECT:-}" ]; then
-        project_hint=" Focus on tasks for project \`${PROJECT}\` — skip work that belongs to a different project unless you are explicitly assigned to it."
-    fi
-
-    # If spawned with a pre-assigned task, tell the agent to claim it directly.
-    # BOAT_TASK_ID is set by the controller when SpawnAgent receives a taskID.
-    # Falls back to the dep-list lookup for agents spawned before this change.
-    local task_hint=""
-    local assigned_task="${BOAT_TASK_ID:-}"
-    if [ -z "${assigned_task}" ] && [ -n "${BOAT_AGENT_BEAD_ID:-}" ] && command -v kd &>/dev/null; then
+    # Resolve pre-assigned task for BOAT_TASK_ID fallback (used by gb nudge-prompt via env).
+    if [ -z "${BOAT_TASK_ID:-}" ] && [ -n "${BOAT_AGENT_BEAD_ID:-}" ] && command -v kd &>/dev/null; then
         assigned_task=$(kd dep list "${BOAT_AGENT_BEAD_ID}" --json 2>/dev/null \
             | jq -r '.[] | select(.type=="assigned") | .depends_on_id' 2>/dev/null | head -1)
-    fi
-    if [ -n "${assigned_task}" ]; then
-        task_hint=" You have been pre-assigned to task \`${assigned_task}\`. Run \`kd show ${assigned_task}\` for details, then \`kd claim ${assigned_task}\` to start work on it."
-    fi
-
-    # Monorepo hint: if reference repos are cloned, tell the agent about them.
-    local monorepo_hint=""
-    if [ -n "${BOAT_REFERENCE_REPOS:-}" ]; then
-        monorepo_hint=" Your workspace has additional repos cloned under repos/. Run \`ls repos/\` to see them. The primary repo is in your workspace root."
+        if [ -n "${assigned_task}" ]; then
+            export BOAT_TASK_ID="${assigned_task}"
+        fi
     fi
 
-    # Build the nudge message based on spawn type.
+    # Resolve nudge prompt from config beads (gb nudge-prompt), falling back to
+    # hardcoded defaults built into the gb binary.
     local nudge_msg
-    if [ -n "${SLACK_THREAD_CHANNEL:-}" ]; then
-        # Thread-bound agent: emphasize resilience, thread interaction, and completing the request.
-        nudge_msg="You are a thread-bound agent spawned from a Slack conversation. Your thread context is in your agent bead description. CRITICAL RULES: (1) Do NOT exit prematurely — if you hit an error, debug it; if you are blocked, ask a clarifying question via \`gb squawk '<question>'\`. Giving up silently is the worst outcome. (2) Create a tracking bead: \`kd create '<short title>' --project ${PROJECT:-gasboat}\` then \`kd claim <id>\`. (3) Post progress updates to the thread via \`gb squawk '<update>'\` at key milestones. (4) When done, summarize results via \`gb squawk\`, push to a feature branch (never main), open a PR if code changed, close your bead, then \`gb done\`.${monorepo_hint}${project_hint} Now read the thread context in your description and begin working."
-    elif [ -n "${BOAT_PROMPT:-}" ]; then
-        # Custom prompt: wrap with standard agent protocols so ad-hoc agents
-        # still create beads, branches, and PRs.
-        nudge_msg="You have been spawned with an ad-hoc task. Before starting: (1) Create a bead to track your work: \`kd create '<short title>' --description '<your task description>' --project ${PROJECT:-gasboat}\` then claim it with \`kd claim <id>\`. (2) Run \`gb news\` to check what teammates are working on — do not duplicate in-progress work. (3) When done, deliver via a feature branch + PR (never push to main).${monorepo_hint} Here is your task: ${BOAT_PROMPT}"
-    else
-        nudge_msg="Check \`gb ready\` for your workflow steps and begin working.${project_hint}${task_hint}${monorepo_hint} IMPORTANT: (1) Run \`gb news\` first to see what your teammates are already working on — do not duplicate in-progress work. (2) Run \`kd claim <id>\` BEFORE starting any task — this atomically marks it in_progress so no other agent picks it up simultaneously."
+    if command -v gb &>/dev/null; then
+        nudge_msg=$(gb nudge-prompt 2>/dev/null) || nudge_msg=""
+    fi
+
+    # Fallback: hardcoded prompts if gb nudge-prompt is unavailable or failed.
+    if [ -z "${nudge_msg}" ]; then
+        local project_hint=""
+        if [ -n "${PROJECT:-}" ]; then
+            project_hint=" Focus on tasks for project \`${PROJECT}\` — skip work that belongs to a different project unless you are explicitly assigned to it."
+        fi
+        local task_hint=""
+        if [ -n "${BOAT_TASK_ID:-}" ]; then
+            task_hint=" You have been pre-assigned to task \`${BOAT_TASK_ID}\`. Run \`kd show ${BOAT_TASK_ID}\` for details, then \`kd claim ${BOAT_TASK_ID}\` to start work on it."
+        fi
+        local monorepo_hint=""
+        if [ -n "${BOAT_REFERENCE_REPOS:-}" ]; then
+            monorepo_hint=" Your workspace has additional repos cloned under repos/. Run \`ls repos/\` to see them. The primary repo is in your workspace root."
+        fi
+        if [ -n "${SLACK_THREAD_CHANNEL:-}" ]; then
+            nudge_msg="You are a thread-bound agent spawned from a Slack conversation. Your thread context is in your agent bead description. CRITICAL RULES: (1) Do NOT exit prematurely — if you hit an error, debug it; if you are blocked, ask a clarifying question via \`gb squawk '<question>'\`. Giving up silently is the worst outcome. (2) Create a tracking bead: \`kd create '<short title>' --project ${PROJECT:-gasboat}\` then \`kd claim <id>\`. (3) Post progress updates to the thread via \`gb squawk '<update>'\` at key milestones. (4) When done, summarize results via \`gb squawk\`, push to a feature branch (never main), open a PR if code changed, close your bead, then \`gb done\`.${monorepo_hint}${project_hint} Now read the thread context in your description and begin working."
+        elif [ -n "${BOAT_PROMPT:-}" ]; then
+            nudge_msg="You have been spawned with an ad-hoc task. Before starting: (1) Create a bead to track your work: \`kd create '<short title>' --description '<your task description>' --project ${PROJECT:-gasboat}\` then claim it with \`kd claim <id>\`. (2) Run \`gb news\` to check what teammates are working on — do not duplicate in-progress work. (3) When done, deliver via a feature branch + PR (never push to main).${monorepo_hint} Here is your task: ${BOAT_PROMPT}"
+        else
+            nudge_msg="Check \`gb ready\` for your workflow steps and begin working.${project_hint}${task_hint}${monorepo_hint} IMPORTANT: (1) Run \`gb news\` first to see what your teammates are already working on — do not duplicate in-progress work. (2) Run \`kd claim <id>\` BEFORE starting any task — this atomically marks it in_progress so no other agent picks it up simultaneously."
+        fi
     fi
 
     echo "[entrypoint] Injecting initial work prompt (role: ${ROLE})"

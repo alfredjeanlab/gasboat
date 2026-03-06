@@ -20,6 +20,7 @@ func TestConfigCategoryNames_ReturnsAll(t *testing.T) {
 		"view":                true,
 		"claude-instructions": true,
 		"wrapup-config":       true,
+		"nudge-prompts":       true,
 	}
 	for _, name := range names {
 		if !expected[name] {

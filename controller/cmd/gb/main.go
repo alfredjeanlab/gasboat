@@ -130,6 +130,7 @@ func init() {
 	rootCmd.AddCommand(yieldCmd)
 	rootCmd.AddCommand(readyCmd)
 	rootCmd.AddCommand(primeCmd)
+	rootCmd.AddCommand(nudgePromptCmd)
 	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(workspaceCmd)
 }
