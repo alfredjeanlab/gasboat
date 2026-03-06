@@ -88,6 +88,13 @@ func BuildSpecFromBeadInfo(cfg *config.Config, project, mode, role, agentName st
 		spec.Env["SLACK_THREAD_TS"] = ts
 	}
 
+	// Prewarmed agents: set BOAT_STANDBY so the entrypoint blocks before
+	// launching Claude, waiting for assignment via nudge.
+	if metadata["agent_state"] == "prewarmed" {
+		spec.Env["BOAT_STANDBY"] = "true"
+		spec.Prewarmed = true
+	}
+
 	return spec
 }
 
@@ -162,6 +169,13 @@ func buildAgentPodSpec(cfg *config.Config, event subscriber.Event) podmanager.Ag
 	}
 	if ts := event.Metadata["slack_thread_ts"]; ts != "" {
 		spec.Env["SLACK_THREAD_TS"] = ts
+	}
+
+	// Prewarmed agents: set BOAT_STANDBY so the entrypoint blocks before
+	// launching Claude, waiting for assignment via nudge.
+	if event.Metadata["agent_state"] == "prewarmed" {
+		spec.Env["BOAT_STANDBY"] = "true"
+		spec.Prewarmed = true
 	}
 
 	return spec

@@ -263,7 +263,7 @@ func TestReportPodStatus_Running(t *testing.T) {
 
 	err := r.ReportPodStatus(context.Background(), "agent-1", PodStatus{
 		PodName: "pod-1", Namespace: "ns", Phase: "Running", Ready: true,
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestReportPodStatus_UnknownPhase_Skips(t *testing.T) {
 
 	err := r.ReportPodStatus(context.Background(), "agent-1", PodStatus{
 		PodName: "pod-1", Namespace: "ns", Phase: "Unknown",
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestReportPodStatus_DaemonError(t *testing.T) {
 
 	err := r.ReportPodStatus(context.Background(), "agent-1", PodStatus{
 		PodName: "pod-1", Namespace: "ns", Phase: "Running",
-	})
+	}, false)
 	if err == nil {
 		t.Fatal("expected error when daemon fails")
 	}
@@ -329,7 +329,7 @@ func TestReportPodStatus_AllPhases(t *testing.T) {
 
 			err := r.ReportPodStatus(context.Background(), "agent-1", PodStatus{
 				PodName: "pod-1", Phase: tt.phase,
-			})
+			}, false)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -340,6 +340,43 @@ func TestReportPodStatus_AllPhases(t *testing.T) {
 				t.Errorf("expected state %s, got %s", tt.state, daemon.stateCalls[0].state)
 			}
 		})
+	}
+}
+
+func TestReportPodStatus_PrewarmedSkipsWorking(t *testing.T) {
+	daemon := &mockBeadUpdater{}
+	client := fake.NewSimpleClientset()
+	r := NewHTTPReporter(daemon, client, "ns", testLogger())
+
+	// Prewarmed agent with Running pod should NOT update to "working".
+	err := r.ReportPodStatus(context.Background(), "agent-1", PodStatus{
+		PodName: "pod-1", Namespace: "ns", Phase: "Running", Ready: true,
+	}, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(daemon.stateCalls) != 0 {
+		t.Errorf("expected 0 state updates for prewarmed+Running, got %d", len(daemon.stateCalls))
+	}
+}
+
+func TestReportPodStatus_PrewarmedAllowsTerminal(t *testing.T) {
+	daemon := &mockBeadUpdater{}
+	client := fake.NewSimpleClientset()
+	r := NewHTTPReporter(daemon, client, "ns", testLogger())
+
+	// Prewarmed agent with Failed pod SHOULD still update to "failed".
+	err := r.ReportPodStatus(context.Background(), "agent-1", PodStatus{
+		PodName: "pod-1", Namespace: "ns", Phase: "Failed",
+	}, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(daemon.stateCalls) != 1 {
+		t.Fatalf("expected 1 state update for prewarmed+Failed, got %d", len(daemon.stateCalls))
+	}
+	if daemon.stateCalls[0].state != "failed" {
+		t.Errorf("expected state failed, got %s", daemon.stateCalls[0].state)
 	}
 }
 
@@ -451,7 +488,7 @@ func TestMetrics_AfterReports(t *testing.T) {
 	r := NewHTTPReporter(daemon, client, "ns", testLogger())
 
 	// Successful status report
-	_ = r.ReportPodStatus(context.Background(), "a", PodStatus{Phase: "Running"})
+	_ = r.ReportPodStatus(context.Background(), "a", PodStatus{Phase: "Running"}, false)
 	// Successful metadata report
 	_ = r.ReportBackendMetadata(context.Background(), "a", BackendMetadata{Backend: "coop"})
 
@@ -469,7 +506,7 @@ func TestMetrics_AfterErrors(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	r := NewHTTPReporter(daemon, client, "ns", testLogger())
 
-	_ = r.ReportPodStatus(context.Background(), "a", PodStatus{Phase: "Running"})
+	_ = r.ReportPodStatus(context.Background(), "a", PodStatus{Phase: "Running"}, false)
 
 	m := r.Metrics()
 	if m.StatusReportsTotal != 1 {
@@ -486,7 +523,7 @@ func TestMetrics_SkippedPhaseStillCounts(t *testing.T) {
 	r := NewHTTPReporter(daemon, client, "ns", testLogger())
 
 	// Unknown phase — skipped, but still counted as a report
-	_ = r.ReportPodStatus(context.Background(), "a", PodStatus{Phase: "Unknown"})
+	_ = r.ReportPodStatus(context.Background(), "a", PodStatus{Phase: "Unknown"}, false)
 
 	m := r.Metrics()
 	if m.StatusReportsTotal != 1 {

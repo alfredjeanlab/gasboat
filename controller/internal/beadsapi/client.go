@@ -34,7 +34,7 @@ type AgentBead struct {
 	// AgentName is the agent's name within its role (e.g., "hq", "k8s").
 	AgentName string
 
-	// AgentState is the agent_state field (spawning, working, done, failed).
+	// AgentState is the agent_state field (spawning, prewarmed, working, done, failed).
 	AgentState string
 
 	// PodPhase is the pod_phase field (pending, running, succeeded, failed).

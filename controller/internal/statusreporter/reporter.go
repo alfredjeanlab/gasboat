@@ -40,7 +40,9 @@ type BackendMetadata struct {
 type Reporter interface {
 	// ReportPodStatus sends a single pod's status to beads.
 	// agentName is the agent bead ID (e.g., "crew-gasboat-crew-furiosa").
-	ReportPodStatus(ctx context.Context, agentName string, status PodStatus) error
+	// prewarmed indicates the pod is a prewarmed agent whose state should
+	// not be overwritten to "working" while waiting for assignment.
+	ReportPodStatus(ctx context.Context, agentName string, status PodStatus, prewarmed bool) error
 
 	// ReportBackendMetadata writes backend connection info to the agent bead's notes.
 	ReportBackendMetadata(ctx context.Context, agentName string, meta BackendMetadata) error
@@ -154,12 +156,22 @@ func NewHTTPReporter(daemon BeadUpdater, client kubernetes.Interface, namespace 
 
 // ReportPodStatus updates the agent's state in beads based on pod phase.
 // Maps K8s pod phases to beads agent states via the daemon HTTP API.
-func (r *HTTPReporter) ReportPodStatus(ctx context.Context, agentName string, status PodStatus) error {
+// Set prewarmed=true to skip overwriting agent_state for prewarmed pods
+// (their state stays "prewarmed" until explicitly assigned).
+func (r *HTTPReporter) ReportPodStatus(ctx context.Context, agentName string, status PodStatus, prewarmed bool) error {
 	r.reportsTotal.Add(1)
 
 	state := PhaseToAgentState(status.Phase)
 	if state == "" {
 		r.logger.Debug("skipping status report for unknown phase",
+			"agent", agentName, "phase", status.Phase)
+		return nil
+	}
+
+	// Prewarmed agents stay prewarmed until explicitly assigned.
+	// Don't overwrite "prewarmed" with "working" when the pod is Running.
+	if prewarmed && state == "working" {
+		r.logger.Debug("skipping status update for prewarmed agent",
 			"agent", agentName, "phase", status.Phase)
 		return nil
 	}
@@ -246,7 +258,8 @@ func (r *HTTPReporter) SyncAll(ctx context.Context) error {
 			Message:   pod.Status.Message,
 		}
 
-		if err := r.ReportPodStatus(ctx, beadID, status); err != nil {
+		isPrewarmed := pod.Annotations[podmanager.AnnotationPrewarmed] == "true"
+		if err := r.ReportPodStatus(ctx, beadID, status, isPrewarmed); err != nil {
 			r.logger.Warn("SyncAll: failed to report pod status",
 				"bead", beadID, "pod", pod.Name, "error", err)
 		}

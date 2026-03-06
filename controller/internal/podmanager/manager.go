@@ -31,6 +31,10 @@ const (
 	// {mode}-{project}-{role}-{agent} pattern.
 	AnnotationBeadID = "gasboat.io/bead-id"
 
+	// AnnotationPrewarmed marks a pod as prewarmed. The status reporter
+	// skips overwriting agent_state=prewarmed with "working" for these pods.
+	AnnotationPrewarmed = "gasboat.io/prewarmed"
+
 	// LabelAppValue is the app label value for all gasboat pods.
 	LabelAppValue = "gasboat"
 
@@ -154,6 +158,10 @@ type AgentPodSpec struct {
 
 	// ReferenceRepos lists additional repos to clone alongside the primary.
 	ReferenceRepos []RepoRef
+
+	// Prewarmed marks this pod as a prewarmed agent. The status reporter
+	// will not overwrite agent_state=prewarmed with "working".
+	Prewarmed bool
 }
 
 // WorkspaceStorageSpec configures a PVC-backed workspace volume.
@@ -344,14 +352,19 @@ func (m *K8sManager) buildPod(spec AgentPodSpec) *corev1.Pod {
 	gracePeriod := int64(45)
 	podSpec.TerminationGracePeriodSeconds = &gracePeriod
 
+	annotations := map[string]string{
+		AnnotationBeadID: spec.BeadID,
+	}
+	if spec.Prewarmed {
+		annotations[AnnotationPrewarmed] = "true"
+	}
+
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      spec.PodName(),
 			Namespace: spec.Namespace,
 			Labels:    spec.Labels(),
-			Annotations: map[string]string{
-				AnnotationBeadID: spec.BeadID,
-			},
+			Annotations: annotations,
 		},
 		Spec: podSpec,
 	}
