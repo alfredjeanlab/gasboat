@@ -421,7 +421,7 @@ func parseConfig() *config {
 		threadingMode = "agent"
 	}
 
-	repos := parseRepoList(envOrDefault("UNRELEASED_REPOS", "groblegark/gasboat,groblegark/kbeads~ext,groblegark/coop~ext"))
+	repos := parseRepoList(envOrDefault("UNRELEASED_REPOS", "groblegark/gasboat,groblegark/kbeads,groblegark/coop"))
 
 	return &config{
 		beadsHTTPAddr:      envOrDefault("BEADS_HTTP_ADDR", "http://localhost:8080"),
