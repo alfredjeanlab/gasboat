@@ -43,7 +43,7 @@ agents:
     enabled: true
     name: gasboat-agent-cluster-admin
   coopBurstLimit: 3
-  coopMaxPods: 0
+  coopMaxPods: 30
   enabled: true
   # Per-project secrets (Claude OAuth, git, GitHub, GitLab, RWX, etc.) are
   # declared on project beads and auto-reconciled by the controller.
