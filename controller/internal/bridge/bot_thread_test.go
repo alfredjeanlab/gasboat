@@ -2,12 +2,14 @@ package bridge
 
 import (
 	"context"
+	"log/slog"
 	"path/filepath"
 	"testing"
-
-	"log/slog"
+	"time"
 
 	"gasboat/controller/internal/beadsapi"
+
+	"github.com/slack-go/slack/slackevents"
 )
 
 func TestThreadAgentsPersistence(t *testing.T) {
@@ -212,7 +214,7 @@ func TestResolveAgentThread_NotFound(t *testing.T) {
 	}
 }
 
-func TestThreadBoundMention_InactiveAgent_ClearsMapping(t *testing.T) {
+func TestRespawnThreadAgent_CreatesSameNameBead(t *testing.T) {
 	daemon := newMockDaemon()
 
 	dir := t.TempDir()
@@ -229,36 +231,252 @@ func TestThreadBoundMention_InactiveAgent_ClearsMapping(t *testing.T) {
 	_ = state.SetThreadAgent(channel, threadTS, agentName)
 
 	b := &Bot{
-		daemon:     daemon,
-		state:      state,
-		logger:     slog.Default(),
-		botUserID:  "U-BOT",
-		agentCards: map[string]MessageRef{},
+		daemon:          daemon,
+		state:           state,
+		logger:          slog.Default(),
+		botUserID:       "U-BOT",
+		agentCards:      map[string]MessageRef{},
+		threadSpawnMsgs: make(map[string]MessageRef),
 	}
 
-	// Verify the mapping exists.
+	b.respawnThreadAgent(context.Background(), channel, threadTS, agentName, "wake up please")
+
+	// Thread→agent mapping should still exist.
 	agent, ok := state.GetThreadAgent(channel, threadTS)
-	if !ok || agent != agentName {
-		t.Fatalf("expected thread agent %q, got %q (ok=%v)", agentName, agent, ok)
+	if !ok {
+		t.Fatal("expected thread agent mapping to be preserved after respawn")
+	}
+	if agent != agentName {
+		t.Errorf("expected agent name %q preserved, got %q", agentName, agent)
 	}
 
-	// getAgentByThread finds the agent from state.
-	got := b.getAgentByThread(channel, threadTS)
-	if got != agentName {
-		t.Fatalf("getAgentByThread = %q, want %q", got, agentName)
+	// Should have created an agent bead with the SAME name.
+	var found *beadsapi.BeadDetail
+	for _, bead := range daemon.beads {
+		if bead.Type == "agent" && bead.Title == agentName {
+			found = bead
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected agent bead to be created with same name")
 	}
 
-	// But FindAgentBead fails (agent is inactive/closed).
-	_, findErr := daemon.FindAgentBead(context.Background(), extractAgentName(agentName))
-	if findErr == nil {
-		t.Fatal("expected FindAgentBead to fail for inactive agent")
+	// Verify fields.
+	if found.Fields["agent"] != agentName {
+		t.Errorf("agent field = %q, want %q", found.Fields["agent"], agentName)
+	}
+	if found.Fields["slack_thread_channel"] != channel {
+		t.Errorf("slack_thread_channel = %q, want %q", found.Fields["slack_thread_channel"], channel)
+	}
+	if found.Fields["slack_thread_ts"] != threadTS {
+		t.Errorf("slack_thread_ts = %q, want %q", found.Fields["slack_thread_ts"], threadTS)
+	}
+	if found.Fields["spawn_source"] != "slack-thread-resume" {
+		t.Errorf("spawn_source = %q, want slack-thread-resume", found.Fields["spawn_source"])
+	}
+	if !hasLabel(found.Labels, "slack-thread") {
+		t.Errorf("expected slack-thread label, got %v", found.Labels)
+	}
+}
+
+func TestRespawnThreadAgent_InfersProjectFromChannel(t *testing.T) {
+	daemon := newMockDaemon()
+	daemon.seedProjectWithChannel("gasboat", "C-gasboat")
+
+	dir := t.TempDir()
+	state, err := NewStateManager(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	// Simulate what handleAppMention now does: clear stale mapping.
-	_ = state.RemoveThreadAgent(channel, threadTS)
+	b := &Bot{
+		daemon:          daemon,
+		state:           state,
+		logger:          slog.Default(),
+		botUserID:       "U-BOT",
+		agentCards:      map[string]MessageRef{},
+		threadSpawnMsgs: make(map[string]MessageRef),
+	}
 
-	// Verify the mapping is cleared.
-	if _, ok := state.GetThreadAgent(channel, threadTS); ok {
-		t.Error("expected thread agent mapping to be removed after inactive agent detected")
+	b.respawnThreadAgent(context.Background(), "C-gasboat", "2222.3333", "my-agent", "do the thing")
+
+	// Find the created agent bead.
+	var found *beadsapi.BeadDetail
+	for _, bead := range daemon.beads {
+		if bead.Type == "agent" && bead.Title == "my-agent" {
+			found = bead
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected agent bead to be created")
+	}
+
+	if found.Fields["project"] != "gasboat" {
+		t.Errorf("project = %q, want gasboat", found.Fields["project"])
+	}
+	if !hasLabel(found.Labels, "project:gasboat") {
+		t.Errorf("expected project:gasboat label, got %v", found.Labels)
+	}
+}
+
+func TestNotifyAgentState_DonePreservesThreadMapping(t *testing.T) {
+	daemon := newMockDaemon()
+	agentName := "thread-1111-2222"
+
+	// Agent bead exists but WITHOUT thread fields — so resolveAgentThread
+	// returns empty and we skip the postThreadStateReply path (which needs
+	// a real Slack API). The mapping preservation is tested via the fact
+	// that NotifyAgentState no longer calls RemoveThreadAgentByAgent.
+	daemon.beads[agentName] = &beadsapi.BeadDetail{
+		ID:    "bd-agent-1",
+		Title: agentName,
+		Type:  "agent",
+		Fields: map[string]string{
+			"agent":       agentName,
+			"agent_state": "done",
+		},
+	}
+
+	dir := t.TempDir()
+	state, err := NewStateManager(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = state.SetThreadAgent("C-test", "1111.2222", agentName)
+
+	b := &Bot{
+		daemon:          daemon,
+		state:           state,
+		logger:          slog.Default(),
+		botUserID:       "U-BOT",
+		agentCards:      map[string]MessageRef{},
+		agentState:      map[string]string{agentName: "working"},
+		agentSeen:       map[string]time.Time{},
+		agentPodName:    map[string]string{},
+		agentImageTag:   map[string]string{},
+		threadSpawnMsgs: make(map[string]MessageRef),
+	}
+
+	// Simulate agent transitioning to "done".
+	b.NotifyAgentState(context.Background(), BeadEvent{
+		Assignee: agentName,
+		Fields: map[string]string{
+			"agent_state": "done",
+			"agent":       agentName,
+		},
+	})
+
+	// The thread→agent mapping should be PRESERVED (not cleared).
+	agent, ok := state.GetThreadAgent("C-test", "1111.2222")
+	if !ok {
+		t.Fatal("expected thread→agent mapping to be preserved after agent done")
+	}
+	if agent != agentName {
+		t.Errorf("mapping agent = %q, want %q", agent, agentName)
+	}
+}
+
+func TestNotifyAgentState_FailedPreservesThreadMapping(t *testing.T) {
+	daemon := newMockDaemon()
+	agentName := "thread-2222-3333"
+
+	daemon.beads[agentName] = &beadsapi.BeadDetail{
+		ID:    "bd-agent-2",
+		Title: agentName,
+		Type:  "agent",
+		Fields: map[string]string{
+			"agent":       agentName,
+			"agent_state": "failed",
+		},
+	}
+
+	dir := t.TempDir()
+	state, err := NewStateManager(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = state.SetThreadAgent("C-test", "2222.3333", agentName)
+
+	b := &Bot{
+		daemon:          daemon,
+		state:           state,
+		logger:          slog.Default(),
+		botUserID:       "U-BOT",
+		agentCards:      map[string]MessageRef{},
+		agentState:      map[string]string{agentName: "working"},
+		agentSeen:       map[string]time.Time{},
+		agentPodName:    map[string]string{},
+		agentImageTag:   map[string]string{},
+		threadSpawnMsgs: make(map[string]MessageRef),
+	}
+
+	b.NotifyAgentState(context.Background(), BeadEvent{
+		Assignee: agentName,
+		Fields: map[string]string{
+			"agent_state": "failed",
+			"agent":       agentName,
+		},
+	})
+
+	// Mapping should still be there after failed state too.
+	if _, ok := state.GetThreadAgent("C-test", "2222.3333"); !ok {
+		t.Fatal("expected thread→agent mapping to be preserved after agent failed")
+	}
+}
+
+func TestHandleAppMention_InactiveThreadAgent_Respawns(t *testing.T) {
+	daemon := newMockDaemon()
+	// Agent NOT in daemon → FindAgentBead will fail.
+
+	dir := t.TempDir()
+	state, err := NewStateManager(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = state.SetThreadAgent("C-test", "1111.2222", "thread-1111-2222")
+
+	b := &Bot{
+		daemon:          daemon,
+		state:           state,
+		logger:          slog.Default(),
+		botUserID:       "U-BOT",
+		agentCards:      map[string]MessageRef{},
+		threadSpawnMsgs: make(map[string]MessageRef),
+	}
+
+	// Simulate an @mention in the thread with a dead agent.
+	ev := &slackevents.AppMentionEvent{
+		User:            "U-HUMAN",
+		Text:            "<@U-BOT> check on this",
+		Channel:         "C-test",
+		TimeStamp:       "1111.3333",
+		ThreadTimeStamp: "1111.2222",
+	}
+
+	b.handleAppMention(context.Background(), ev)
+
+	// Should have respawned the SAME agent (not created a new thread-XXXX).
+	var foundRespawn bool
+	for _, bead := range daemon.beads {
+		if bead.Type == "agent" && bead.Title == "thread-1111-2222" {
+			foundRespawn = true
+			if bead.Fields["spawn_source"] != "slack-thread-resume" {
+				t.Errorf("expected spawn_source=slack-thread-resume, got %q", bead.Fields["spawn_source"])
+			}
+		}
+		// Should NOT have spawned a different agent name.
+		if bead.Type == "agent" && bead.Title != "thread-1111-2222" {
+			t.Errorf("should not spawn a new agent, found %q", bead.Title)
+		}
+	}
+	if !foundRespawn {
+		t.Error("expected respawn of same agent thread-1111-2222")
+	}
+
+	// Mapping should be preserved.
+	if _, ok := state.GetThreadAgent("C-test", "1111.2222"); !ok {
+		t.Error("expected thread→agent mapping to be preserved after respawn")
 	}
 }

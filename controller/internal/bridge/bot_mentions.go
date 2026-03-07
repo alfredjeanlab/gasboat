@@ -109,13 +109,11 @@ func (b *Bot) handleAppMention(ctx context.Context, ev *slackevents.AppMentionEv
 		// Validate the thread-bound agent is still active (mirrors Priority 1 validation).
 		agentBead, err := b.daemon.FindAgentBead(ctx, extractAgentName(agent))
 		if err != nil {
-			b.logger.Info("mention: thread-bound agent no longer active",
+			b.logger.Info("mention: thread-bound agent no longer active, respawning with session resume",
 				"agent", agent, "channel", ev.Channel, "thread_ts", ev.ThreadTimeStamp, "error", err)
-			// Agent is gone — clear stale mapping and spawn a replacement.
-			if b.state != nil {
-				_ = b.state.RemoveThreadAgent(ev.Channel, ev.ThreadTimeStamp)
-			}
-			b.handleThreadSpawn(ctx, ev, text)
+			// Agent is gone — respawn the SAME agent name so the entrypoint
+			// finds the existing session JSONL and PVC for session continuity.
+			b.respawnThreadAgent(ctx, ev.Channel, ev.ThreadTimeStamp, agent, text)
 			return
 		}
 		agentPodName = beadsapi.ParseNotes(agentBead.Notes)["pod_name"]
@@ -684,12 +682,11 @@ func (b *Bot) handleThreadForward(ctx context.Context, ev *slackevents.MessageEv
 
 	// Validate the agent is still active.
 	if _, err := b.daemon.FindAgentBead(ctx, agentName); err != nil {
-		b.logger.Debug("thread-forward: agent no longer active",
+		b.logger.Info("thread-forward: agent no longer active, respawning with session resume",
 			"agent", agentName, "channel", ev.Channel, "thread_ts", ev.ThreadTimeStamp)
-		// Clear stale mapping.
-		if b.state != nil {
-			_ = b.state.RemoveThreadAgent(ev.Channel, ev.ThreadTimeStamp)
-		}
+		// Agent is gone — respawn the SAME agent name so the entrypoint
+		// finds the existing session JSONL and PVC for session continuity.
+		b.respawnThreadAgent(ctx, ev.Channel, ev.ThreadTimeStamp, agentName, ev.Text)
 		return
 	}
 

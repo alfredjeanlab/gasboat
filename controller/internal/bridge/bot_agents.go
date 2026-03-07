@@ -287,11 +287,8 @@ func (b *Bot) NotifyAgentState(_ context.Context, bead BeadEvent) {
 		defer cancel()
 		if slackChannel, slackTS := b.resolveAgentThread(ctx, agent); slackChannel != "" && slackTS != "" {
 			b.postThreadStateReply(ctx, agent, state, bead, slackChannel, slackTS)
-			// Clear thread→agent mapping so future mentions in this thread
-			// spawn a fresh agent instead of routing to the dead one.
-			if b.state != nil {
-				_ = b.state.RemoveThreadAgentByAgent(agent)
-			}
+			// Keep the thread→agent mapping so future replies in this thread
+			// can respawn the same agent with session resume (same name, same PVC).
 			return
 		}
 	}
@@ -724,6 +721,84 @@ func (b *Bot) killAgent(ctx context.Context, agentName string, force bool) error
 	}
 
 	return nil
+}
+
+// respawnThreadAgent re-creates an agent bead with the SAME name so the
+// entrypoint finds the existing session JSONL and PVC workspace, passing
+// --resume to coop for session continuity. Used when a thread reply arrives
+// for a dead/completed agent. The triggerText is included in the description
+// so the agent knows why it was woken up.
+func (b *Bot) respawnThreadAgent(ctx context.Context, channel, threadTS, agentName, triggerText string) {
+	agentName = extractAgentName(agentName)
+
+	// Infer project from channel (same logic as handleThreadSpawn).
+	project := b.projectFromChannel(ctx, channel)
+	if project == "" && b.router != nil {
+		if mapped := b.router.GetAgentByChannel(channel); mapped != "" {
+			project = projectFromAgentIdentity(mapped)
+		}
+	}
+
+	// Build agent bead fields.
+	fields := map[string]string{
+		"agent":                agentName,
+		"mode":                 "job",
+		"role":                 "thread",
+		"project":              project,
+		"slack_thread_channel": channel,
+		"slack_thread_ts":      threadTS,
+		"spawn_source":         "slack-thread-resume",
+	}
+	fieldsJSON, err := json.Marshal(fields)
+	if err != nil {
+		b.logger.Error("respawn-thread-agent: marshal fields", "error", err)
+		return
+	}
+
+	labels := []string{"slack-thread"}
+	if project != "" {
+		labels = append(labels, "project:"+project)
+	}
+
+	description := fmt.Sprintf("Session-resumed thread agent.\n\nTriggered by thread reply:\n%s",
+		truncateText(triggerText, 2000))
+
+	beadID, err := b.daemon.CreateBead(ctx, beadsapi.CreateBeadRequest{
+		Title:       agentName,
+		Type:        "agent",
+		Description: description,
+		Fields:      json.RawMessage(fieldsJSON),
+		Labels:      labels,
+	})
+	if err != nil {
+		b.logger.Error("respawn-thread-agent: failed to create bead",
+			"agent", agentName, "channel", channel, "thread_ts", threadTS, "error", err)
+		return
+	}
+
+	// Re-establish thread→agent mapping.
+	if b.state != nil {
+		_ = b.state.SetThreadAgent(channel, threadTS, agentName)
+	}
+
+	b.logger.Info("respawned thread agent with session resume",
+		"agent", agentName, "bead", beadID, "channel", channel, "thread_ts", threadTS)
+
+	// Post confirmation in thread.
+	if b.api != nil {
+		msg := fmt.Sprintf(":arrows_counterclockwise: Resuming agent *%s* (tracking: `%s`)", agentName, beadID)
+		_, msgTS, _ := b.api.PostMessage(channel,
+			slack.MsgOptionText(msg, false),
+			slack.MsgOptionTS(threadTS),
+		)
+		if msgTS != "" {
+			b.mu.Lock()
+			b.threadSpawnMsgs[agentName] = MessageRef{
+				ChannelID: channel, Timestamp: msgTS, ThreadTS: threadTS,
+			}
+			b.mu.Unlock()
+		}
+	}
 }
 
 // handleClearAgent handles the "Clear" button on a done/failed agent card.

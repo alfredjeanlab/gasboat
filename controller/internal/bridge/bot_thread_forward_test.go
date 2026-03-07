@@ -216,9 +216,9 @@ func TestHandleMessageEvent_ThreadForward_SkipsSubtypes(t *testing.T) {
 	}
 }
 
-func TestHandleMessageEvent_ThreadForward_InactiveAgent(t *testing.T) {
+func TestHandleMessageEvent_ThreadForward_InactiveAgent_Respawns(t *testing.T) {
 	daemon := newMockDaemon()
-	// Agent NOT in daemon → FindAgentBead will fail.
+	// Agent NOT in daemon → FindAgentBead will fail → should respawn with session resume.
 
 	dir := t.TempDir()
 	state, err := NewStateManager(filepath.Join(dir, "state.json"))
@@ -234,6 +234,7 @@ func TestHandleMessageEvent_ThreadForward_InactiveAgent(t *testing.T) {
 		botUserID:       "U-BOT",
 		agentCards:      map[string]MessageRef{},
 		lastThreadNudge: make(map[string]time.Time),
+		threadSpawnMsgs: make(map[string]MessageRef),
 	}
 
 	ev := &slackevents.MessageEvent{
@@ -252,16 +253,20 @@ func TestHandleMessageEvent_ThreadForward_InactiveAgent(t *testing.T) {
 
 	b.handleThreadForward(context.Background(), ev, agent)
 
-	// Should have cleared the stale mapping.
-	if _, ok := state.GetThreadAgent("C-test", "1111.2222"); ok {
-		t.Error("expected stale thread agent mapping to be removed")
+	// Should KEEP the thread→agent mapping (respawn preserves it).
+	if _, ok := state.GetThreadAgent("C-test", "1111.2222"); !ok {
+		t.Error("expected thread agent mapping to be preserved after respawn")
 	}
 
-	// Should NOT have created any task bead.
+	// Should have created an agent bead with the same name for session resume.
+	var foundAgentBead bool
 	for _, bead := range daemon.beads {
-		if hasLabel(bead.Labels, "slack-thread-reply") {
-			t.Error("should not create bead for inactive agent")
+		if bead.Type == "agent" && bead.Title == "dead-agent" {
+			foundAgentBead = true
 		}
+	}
+	if !foundAgentBead {
+		t.Error("expected agent bead to be created for session-resume respawn")
 	}
 }
 
