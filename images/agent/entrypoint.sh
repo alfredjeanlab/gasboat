@@ -356,6 +356,10 @@ cd "${WORKSPACE}"
 
 COOP_CMD="coop --agent=claude --port 8080 --port-health 9090 --cols 200 --rows 50"
 
+# Use the pod hostname as the mux session ID so that Slack deep-links
+# (which embed the pod name as the URL #fragment) resolve correctly.
+export COOP_MUX_SESSION_ID="${HOSTNAME:-$(hostname)}"
+
 # Agent command: use BOAT_COMMAND if set (e.g., "claudeless run /path/to/scenario.toml"
 # for E2E testing without consuming API credits). Defaults to real Claude Code.
 AGENT_CMD="${BOAT_COMMAND:-claude --dangerously-skip-permissions}"
@@ -655,69 +659,9 @@ monitor_agent_exit() {
     done
 }
 
-# ── Mux registration ──────────────────────────────────────────────────────
-MUX_SESSION_ID=""
-register_with_mux() {
-    local mux_url="${COOP_MUX_URL}"
-    if [ -z "${mux_url}" ]; then
-        return 0
-    fi
-
-    # Wait for local coop to be healthy
-    for i in $(seq 1 30); do
-        sleep 2
-        curl -sf http://localhost:8080/api/v1/health >/dev/null 2>&1 && break
-    done
-
-    local session_id="${HOSTNAME:-$(hostname)}"
-    local coop_url="http://${POD_IP:-$(hostname -i 2>/dev/null || echo localhost)}:8080"
-    local auth_token="${COOP_AUTH_TOKEN:-${COOP_BROKER_TOKEN:-}}"
-    local mux_auth="${COOP_MUX_AUTH_TOKEN:-${auth_token}}"
-
-    echo "[entrypoint] Registering with mux: id=${session_id} url=${coop_url}"
-
-    local payload
-    payload=$(jq -n \
-        --arg url "${coop_url}" \
-        --arg id "${session_id}" \
-        --arg role "${BOAT_ROLE:-unknown}" \
-        --arg agent "${BOAT_AGENT:-unknown}" \
-        --arg pod "${HOSTNAME:-}" \
-        --arg ip "${POD_IP:-}" \
-        '{url: $url, id: $id, metadata: {role: $role, agent: $agent, k8s: {pod: $pod, ip: $ip}}}')
-
-    if [ -n "${auth_token}" ]; then
-        payload=$(echo "${payload}" | jq --arg t "${auth_token}" '.auth_token = $t')
-    fi
-
-    local result
-    result=$(curl -sf -X POST "${mux_url}/api/v1/sessions" \
-        -H 'Content-Type: application/json' \
-        ${mux_auth:+-H "Authorization: Bearer ${mux_auth}"} \
-        -d "${payload}" 2>&1) || {
-        echo "[entrypoint] WARNING: mux registration failed: ${result}"
-        return 0
-    }
-
-    MUX_SESSION_ID="${session_id}"
-    echo "[entrypoint] Registered with mux as '${session_id}'"
-}
-
-deregister_from_mux() {
-    if [ -z "${COOP_MUX_URL}" ] || [ -z "${MUX_SESSION_ID}" ]; then
-        return 0
-    fi
-    local mux_auth="${COOP_MUX_AUTH_TOKEN:-${COOP_AUTH_TOKEN:-}}"
-    curl -sf -X DELETE "${COOP_MUX_URL}/api/v1/sessions/${MUX_SESSION_ID}" \
-        ${mux_auth:+-H "Authorization: Bearer ${mux_auth}"} >/dev/null 2>&1 || true
-    echo "[entrypoint] Deregistered from mux (${MUX_SESSION_ID})"
-    MUX_SESSION_ID=""
-}
-
 # ── Signal forwarding ─────────────────────────────────────────────────────
 COOP_PID=""
 forward_signal() {
-    deregister_from_mux
     if [ -n "${COOP_PID}" ]; then
         echo "[entrypoint] Graceful shutdown: interrupting Claude before forwarding $1"
         # Send Escape to interrupt Claude mid-generation.
@@ -882,7 +826,6 @@ while true; do
         if [ "${stop_req}" = "true" ]; then
             echo "[entrypoint] stop_requested — closing agent bead and exiting cleanly"
             kd close "${KD_AGENT_ID}" 2>/dev/null || true
-            deregister_from_mux
             exit 0
         fi
     fi
