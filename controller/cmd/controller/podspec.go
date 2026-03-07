@@ -88,11 +88,13 @@ func BuildSpecFromBeadInfo(cfg *config.Config, project, mode, role, agentName st
 		spec.Env["SLACK_THREAD_TS"] = ts
 	}
 
-	// Prewarmed agents: Claude starts normally (no BOAT_STANDBY). The gb prime
-	// hook detects agent_state=prewarmed and outputs a standby message. When
-	// assigned, the pool manager nudges the coop API to inject work.
+	// Prewarmed agents: block in entrypoint standby mode (BOAT_STANDBY=true)
+	// until the pool manager assigns work by transitioning agent_state from
+	// "prewarmed" to "assigning". The entrypoint polls agent_state and starts
+	// Claude only after assignment, preventing stampede from self-selection.
 	if metadata["agent_state"] == "prewarmed" {
 		spec.Env["BOAT_AGENT_STATE"] = "prewarmed"
+		spec.Env["BOAT_STANDBY"] = "true"
 		spec.Prewarmed = true
 	}
 
@@ -172,11 +174,13 @@ func buildAgentPodSpec(cfg *config.Config, event subscriber.Event) podmanager.Ag
 		spec.Env["SLACK_THREAD_TS"] = ts
 	}
 
-	// Prewarmed agents: Claude starts normally (no BOAT_STANDBY). The gb prime
-	// hook detects agent_state=prewarmed and outputs a standby message. When
-	// assigned, the pool manager nudges the coop API to inject work.
+	// Prewarmed agents: block in entrypoint standby mode (BOAT_STANDBY=true)
+	// until the pool manager assigns work by transitioning agent_state from
+	// "prewarmed" to "assigning". The entrypoint polls agent_state and starts
+	// Claude only after assignment, preventing stampede from self-selection.
 	if event.Metadata["agent_state"] == "prewarmed" {
 		spec.Env["BOAT_AGENT_STATE"] = "prewarmed"
+		spec.Env["BOAT_STANDBY"] = "true"
 		spec.Prewarmed = true
 	}
 

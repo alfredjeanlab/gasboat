@@ -248,6 +248,10 @@ type AssignRequest struct {
 	ThreadTS    string `json:"thread_ts"`
 	Description string `json:"description"`
 	Project     string `json:"project"`
+	// TaskID is an optional pre-assigned task bead ID. When set, it is written
+	// to the agent bead's task_id field so the entrypoint can hydrate
+	// BOAT_TASK_ID after leaving standby mode.
+	TaskID string `json:"task_id,omitempty"`
 }
 
 // AssignResult is returned when a prewarmed agent is successfully assigned.
@@ -304,6 +308,9 @@ func (m *Manager) AssignPrewarmed(ctx context.Context, req AssignRequest) (*Assi
 	}
 	if req.Project != "" {
 		fields["project"] = req.Project
+	}
+	if req.TaskID != "" {
+		fields["task_id"] = req.TaskID
 	}
 	if err := m.daemon.UpdateBeadFields(ctx, pick.ID, fields); err != nil {
 		return nil, fmt.Errorf("updating prewarmed agent %s: %w", pick.ID, err)

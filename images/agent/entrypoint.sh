@@ -822,6 +822,12 @@ if [ "${BOAT_STANDBY:-}" = "true" ] && [ -n "${BOAT_AGENT_BEAD_ID:-}" ]; then
                         export PROJECT="${assigned_project}"
                         echo "[entrypoint] Hydrated PROJECT=${assigned_project}"
                     fi
+                    # Hydrate task_id so inject_initial_prompt includes pre-assigned task hint.
+                    assigned_task_id=$(echo "${bead_json}" | jq -r '.fields.task_id // empty' 2>/dev/null)
+                    if [ -n "${assigned_task_id}" ]; then
+                        export BOAT_TASK_ID="${assigned_task_id}"
+                        echo "[entrypoint] Hydrated BOAT_TASK_ID=${assigned_task_id}"
+                    fi
                 fi
             fi
 

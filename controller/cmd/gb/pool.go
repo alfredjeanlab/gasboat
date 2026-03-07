@@ -195,6 +195,65 @@ func runPoolFlush(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// ── pool assign ─────────────────────────────────────────────────────
+
+var poolAssignTaskID string
+
+var poolAssignCmd = &cobra.Command{
+	Use:   "assign",
+	Short: "Assign a task to a prewarmed agent from the pool",
+	Long: `Assigns work to an idle prewarmed agent. The pool manager picks the oldest
+available agent (FIFO) and transitions it from prewarmed to assigning.
+
+The agent's entrypoint detects the state change, exits standby, and starts
+Claude with the assigned work context.`,
+	RunE: runPoolAssign,
+}
+
+func runPoolAssign(cmd *cobra.Command, args []string) error {
+	project := resolvePoolProject()
+	if project == "" {
+		return fmt.Errorf("--project is required (or set BOAT_PROJECT)")
+	}
+
+	ctx := context.Background()
+
+	agents, err := daemon.ListAgentBeads(ctx)
+	if err != nil {
+		return fmt.Errorf("listing agents: %w", err)
+	}
+
+	// Find a prewarmed agent for the project.
+	var pick *beadsapi.AgentBead
+	for i, a := range agents {
+		if a.AgentState == "prewarmed" && a.Project == project {
+			pick = &agents[i]
+			break
+		}
+	}
+	if pick == nil {
+		return fmt.Errorf("no prewarmed agents available for project %q", project)
+	}
+
+	// Transition agent_state to assigning and set task_id if provided.
+	fields := map[string]string{
+		"agent_state":  "assigning",
+		"spawn_source": "pool-assign-cli",
+	}
+	if poolAssignTaskID != "" {
+		fields["task_id"] = poolAssignTaskID
+	}
+	if err := daemon.UpdateBeadFields(ctx, pick.ID, fields); err != nil {
+		return fmt.Errorf("updating agent bead: %w", err)
+	}
+
+	fmt.Fprintf(os.Stdout, "Assigned agent %s (%s) for project %q\n", pick.AgentName, pick.ID, project)
+	if poolAssignTaskID != "" {
+		fmt.Fprintf(os.Stdout, "  Task: %s\n", poolAssignTaskID)
+	}
+	return nil
+}
+
 // ── helpers ─────────────────────────────────────────────────────────
 
 func resolvePoolProject() string {
@@ -257,8 +316,11 @@ func updatePoolConfig(ctx context.Context, beadID, project string, cfg *beadsapi
 func init() {
 	poolCmd.PersistentFlags().StringVar(&poolProject, "project", "", "project name (default: from BOAT_PROJECT)")
 
+	poolAssignCmd.Flags().StringVar(&poolAssignTaskID, "task", "", "task bead ID to pre-assign (optional)")
+
 	poolCmd.AddCommand(poolStatusCmd)
 	poolCmd.AddCommand(poolDisableCmd)
 	poolCmd.AddCommand(poolEnableCmd)
 	poolCmd.AddCommand(poolFlushCmd)
+	poolCmd.AddCommand(poolAssignCmd)
 }
