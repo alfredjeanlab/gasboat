@@ -165,6 +165,13 @@ agents:
   # Periodic reconciliation interval (e.g. "60s", "5m")
   coopSyncInterval: ""
 
+  # How long to wait for an agent to reach idle state during rolling upgrades
+  # before force-deleting the pod (e.g. "5m", "10m")
+  coopUpgradeDrainTimeout: ""
+
+  # Slack bridge URL override for agent pods. Auto-wired when slackBridge.enabled.
+  slackBridgeURL: ""
+
   # --- Autodestruct ---
   #
   # Emergency kill-switch: force-deletes all agent pods and pauses reconciliation.

@@ -205,6 +205,13 @@ Coopmux service URL
 {{- end }}
 
 {{/*
+Slack bridge service URL (auto-wired when slackBridge is enabled)
+*/}}
+{{- define "gasboat.slackBridge.serviceURL" -}}
+{{- printf "http://%s-slack-bridge:%d" (include "gasboat.fullname" .) (int (.Values.slackBridge.service.port | default 8090)) }}
+{{- end }}
+
+{{/*
 Coopmux ingress middlewares — shared middleware list for all ingress routes.
 Accepts a dict with "fullname" and "Values" keys plus an "includeBasicAuth" boolean.
 */}}

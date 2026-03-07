@@ -155,6 +155,14 @@ spec:
             - name: COOP_SYNC_INTERVAL
               value: {{ .Values.agents.coopSyncInterval | quote }}
             {{- end }}
+            {{- if .Values.agents.coopUpgradeDrainTimeout }}
+            - name: COOP_UPGRADE_DRAIN_TIMEOUT
+              value: {{ .Values.agents.coopUpgradeDrainTimeout | quote }}
+            {{- end }}
+            {{- if or .Values.agents.slackBridgeURL .Values.slackBridge.enabled }}
+            - name: SLACK_BRIDGE_URL
+              value: {{ .Values.agents.slackBridgeURL | default (include "gasboat.slackBridge.serviceURL" .) }}
+            {{- end }}
             {{- if .Values.agents.claudeModel }}
             - name: CLAUDE_MODEL
               value: {{ .Values.agents.claudeModel }}
