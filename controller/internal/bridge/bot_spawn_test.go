@@ -564,3 +564,74 @@ func TestHandleSlashCommand_RoutesStartAndSpawn(t *testing.T) {
 		t.Fatalf("expected /spawn to create a second agent bead, got %d total", len(agentBeads))
 	}
 }
+
+func TestSplitQuotedArgs_SmartQuotes(t *testing.T) {
+	tests := []struct {
+		name string
+		input string
+		want []string
+	}{
+		{"straight quotes", `"fix the helm chart"`, []string{"fix the helm chart"}},
+		{"smart quotes", "\u201cfix the helm chart\u201d", []string{"fix the helm chart"}},
+		{"mixed quotes", "\u201cfix the chart\u201d and more", []string{"fix the chart", "and", "more"}},
+		{"no quotes", "fix the helm chart", []string{"fix", "the", "helm", "chart"}},
+		{"empty", "", nil},
+		{"single word", "deploy", []string{"deploy"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := splitQuotedArgs(tt.input)
+			if len(got) != len(tt.want) {
+				t.Fatalf("splitQuotedArgs(%q) = %v (len %d), want %v (len %d)", tt.input, got, len(got), tt.want, len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("splitQuotedArgs(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestHandleSpawnCommand_SmartQuotes_PassesPrompt(t *testing.T) {
+	daemon := newMockDaemon()
+	slackSrv := newFakeSlackServer(t)
+	defer slackSrv.Close()
+
+	bot := newTestBot(daemon, slackSrv)
+
+	// Simulate Slack sending smart quotes: /spawn "fix the helm chart"
+	bot.handleSpawnCommand(context.Background(), slack.SlashCommand{
+		Command:   "/spawn",
+		Text:      "\u201cfix the helm chart\u201d",
+		ChannelID: "C123",
+		UserID:    "U456",
+	})
+
+	// Should have created a task bead + agent bead.
+	taskBeads := filterBeadsByType(daemon.beads, "task")
+	if len(taskBeads) == 0 {
+		t.Fatal("expected a task bead to be created for the prompt")
+	}
+	found := false
+	for _, tb := range taskBeads {
+		if tb.Title == "fix the helm chart" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected task bead with title 'fix the helm chart', got %v", taskBeads)
+	}
+
+	agentBeads := filterAgentBeads(daemon.beads)
+	if len(agentBeads) == 0 {
+		t.Fatal("expected an agent bead to be created")
+	}
+	// The agent bead should have the prompt in its fields.
+	for _, ab := range agentBeads {
+		if ab.Fields["prompt"] == "fix the helm chart" {
+			return // success
+		}
+	}
+	t.Errorf("expected agent bead to have prompt field 'fix the helm chart'")
+}

@@ -112,12 +112,19 @@ func (m *mockDaemon) SpawnAgent(_ context.Context, agentName, project, taskID, r
 	if taskID != "" {
 		desc = "Assigned to task: " + taskID
 	}
+	fields := map[string]string{"agent": agentName, "project": project, "mode": "crew", "role": role}
+	if customPrompt != "" {
+		fields["prompt"] = customPrompt
+	}
+	if taskID != "" {
+		fields["task_id"] = taskID
+	}
 	m.beads[id] = &beadsapi.BeadDetail{
 		ID:          id,
 		Title:       agentName,
 		Type:        "agent",
 		Description: desc,
-		Fields:      map[string]string{"agent": agentName, "project": project, "mode": "crew", "role": role},
+		Fields:      fields,
 	}
 	return id, nil
 }

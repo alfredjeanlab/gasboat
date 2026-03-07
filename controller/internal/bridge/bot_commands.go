@@ -68,9 +68,10 @@ func (b *Bot) handleSpawnCommand(ctx context.Context, cmd slack.SlashCommand) {
 
 	taskID := ""
 
-	// Detect task description: either positional[0] has spaces (old form: /spawn "desc"),
-	// or positional[0] is a plain project name and positional[1] has spaces
-	// (new form: /spawn gasboat "desc").
+	// Detect task description:
+	//   /spawn "fix the helm chart"             → positional[0] has spaces (quoted)
+	//   /spawn gasboat "fix the helm chart"      → positional[1] has spaces
+	//   /spawn fix the helm chart                → multiple unquoted words (no ticket ref)
 	taskDescription := ""
 	if len(positional) > 0 && strings.Contains(positional[0], " ") {
 		taskDescription = positional[0]
@@ -78,6 +79,9 @@ func (b *Bot) handleSpawnCommand(ctx context.Context, cmd slack.SlashCommand) {
 		// /spawn <project> "task description"
 		project = positional[0]
 		taskDescription = positional[1]
+	} else if len(positional) > 1 && !isTicketRef(positional[0]) && !isValidAgentName(positional[0]) {
+		// Multiple unquoted words that aren't a ticket or agent name — treat as description.
+		taskDescription = strings.Join(positional, " ")
 	}
 
 	if taskDescription != "" {
@@ -380,11 +384,13 @@ func randomSuffix(n int) string {
 // strings as single arguments. Quotes are stripped from the resulting tokens.
 // Example: `my-bot "fix the login bug" --role crew` → ["my-bot", "fix the login bug", "--role", "crew"]
 func splitQuotedArgs(s string) []string {
+	// Normalize smart quotes (Slack converts " to \u201c/\u201d).
+	s = strings.NewReplacer("\u201c", "\"", "\u201d", "\"", "\u2018", "'", "\u2019", "'").Replace(s)
+
 	var args []string
 	var current strings.Builder
 	inQuotes := false
-	for i := 0; i < len(s); i++ {
-		ch := s[i]
+	for _, ch := range s {
 		switch {
 		case ch == '"':
 			inQuotes = !inQuotes
@@ -394,7 +400,7 @@ func splitQuotedArgs(s string) []string {
 				current.Reset()
 			}
 		default:
-			current.WriteByte(ch)
+			current.WriteRune(ch)
 		}
 	}
 	if current.Len() > 0 {
