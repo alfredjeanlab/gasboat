@@ -147,6 +147,30 @@ spec:
             - name: COOP_BURST_LIMIT
               value: {{ .Values.agents.coopBurstLimit | quote }}
             {{- end }}
+            {{- if .Values.agents.coopRateLimitWindow }}
+            - name: COOP_RATE_LIMIT_WINDOW
+              value: {{ .Values.agents.coopRateLimitWindow | quote }}
+            {{- end }}
+            {{- if .Values.agents.coopRateLimitMax }}
+            - name: COOP_RATE_LIMIT_MAX
+              value: {{ .Values.agents.coopRateLimitMax | quote }}
+            {{- end }}
+            {{- if .Values.agents.coopCircuitBreakerThreshold }}
+            - name: COOP_CIRCUIT_BREAKER_THRESHOLD
+              value: {{ .Values.agents.coopCircuitBreakerThreshold | quote }}
+            {{- end }}
+            {{- if .Values.agents.coopCircuitBreakerWindow }}
+            - name: COOP_CIRCUIT_BREAKER_WINDOW
+              value: {{ .Values.agents.coopCircuitBreakerWindow | quote }}
+            {{- end }}
+            {{- if .Values.agents.coopCircuitBreakerCooldown }}
+            - name: COOP_CIRCUIT_BREAKER_COOLDOWN
+              value: {{ .Values.agents.coopCircuitBreakerCooldown | quote }}
+            {{- end }}
+            {{- if .Values.agents.prewarmedPoolInterval }}
+            - name: PREWARMED_POOL_INTERVAL
+              value: {{ .Values.agents.prewarmedPoolInterval | quote }}
+            {{- end }}
             {{- if .Values.agents.logLevel }}
             - name: LOG_LEVEL
               value: {{ .Values.agents.logLevel }}

@@ -162,8 +162,32 @@ agents:
   # Max pods to create in a single reconciliation pass (prevents memory pressure)
   coopBurstLimit: 3
 
+  # --- Rate Limiter (stampede prevention) ---
+
+  # Sliding window for pod creation rate limiting (e.g. "5m", "10m")
+  coopRateLimitWindow: ""
+
+  # Max pods that can be created within the rate limit window before pausing.
+  # 0 means no rate limiting.
+  coopRateLimitMax: 0
+
+  # --- Circuit Breaker (stampede prevention) ---
+
+  # Max pod creations within the circuit breaker window before tripping.
+  # 0 means disabled.
+  coopCircuitBreakerThreshold: 0
+
+  # Rolling window for circuit breaker creation counting (e.g. "2m", "5m")
+  coopCircuitBreakerWindow: ""
+
+  # Cooldown after circuit breaker trips before auto-resetting (e.g. "5m")
+  coopCircuitBreakerCooldown: ""
+
   # Periodic reconciliation interval (e.g. "60s", "5m")
   coopSyncInterval: ""
+
+  # Prewarmed pool reconcile interval (e.g. "30s", "1m")
+  prewarmedPoolInterval: ""
 
   # --- Autodestruct ---
   #
