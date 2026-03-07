@@ -98,6 +98,8 @@ func (d *Dedup) Mark(key string) {
 // CatchUpDecisions fetches pending decisions from the daemon and pre-populates
 // the dedup map. Decisions older than 1 hour are skipped to prevent flood on
 // cloned DBs. New decisions are notified with rate limiting.
+// Decisions assigned to closed/done/failed agents are skipped to prevent
+// stale decisions from re-appearing on agent cards after a bridge restart.
 func (d *Dedup) CatchUpDecisions(ctx context.Context, daemon BeadClient, notifier Notifier, logger *slog.Logger) {
 	if daemon == nil {
 		return
@@ -109,8 +111,23 @@ func (d *Dedup) CatchUpDecisions(ctx context.Context, daemon BeadClient, notifie
 		return
 	}
 
+	// Build a set of active (non-terminal) agent names so we can skip
+	// decisions assigned to agents that have already finished.
+	activeAgents := make(map[string]bool)
+	if agents, err := daemon.ListAgentBeads(ctx); err == nil {
+		for _, a := range agents {
+			if a.AgentState == "done" || a.AgentState == "failed" {
+				continue
+			}
+			activeAgents[extractAgentName(a.AgentName)] = true
+		}
+	} else {
+		logger.Warn("catch-up: failed to list agents, skipping agent filter", "error", err)
+	}
+
 	notified := 0
 	skippedSeen := 0
+	skippedClosedAgent := 0
 
 	for _, dec := range decisions {
 		key := "created:" + dec.ID
@@ -122,6 +139,14 @@ func (d *Dedup) CatchUpDecisions(ctx context.Context, daemon BeadClient, notifie
 		// Skip decisions that already have a chosen value (resolved).
 		if dec.Fields["chosen"] != "" {
 			d.Mark("resolved:" + dec.ID)
+			continue
+		}
+
+		// Skip decisions assigned to agents that are closed/done/failed.
+		agent := extractAgentName(dec.Assignee)
+		if agent != "" && len(activeAgents) > 0 && !activeAgents[agent] {
+			skippedClosedAgent++
+			d.Mark(key) // Mark seen so SSE replay doesn't re-notify either.
 			continue
 		}
 
@@ -140,7 +165,8 @@ func (d *Dedup) CatchUpDecisions(ctx context.Context, daemon BeadClient, notifie
 	logger.Info("catch-up complete",
 		"total", len(decisions),
 		"notified", notified,
-		"skipped_seen", skippedSeen)
+		"skipped_seen", skippedSeen,
+		"skipped_closed_agent", skippedClosedAgent)
 }
 
 // CatchUpAgents fetches active agent beads from the daemon and pre-populates

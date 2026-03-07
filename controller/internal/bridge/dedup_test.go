@@ -140,6 +140,61 @@ func TestDedup_CatchUpAgents_Empty(t *testing.T) {
 	}
 }
 
+func TestDedup_CatchUpDecisions_SkipsClosedAgentDecisions(t *testing.T) {
+	d := NewDedup(slog.Default())
+	daemon := newMockDaemon()
+
+	// Add a done agent.
+	daemon.beads["agent-done"] = &beadsapi.BeadDetail{
+		ID:   "agent-done",
+		Type: "agent",
+		Fields: map[string]string{
+			"agent":       "worker-done",
+			"agent_state": "done",
+		},
+	}
+	// Add a working agent.
+	daemon.beads["agent-active"] = &beadsapi.BeadDetail{
+		ID:   "agent-active",
+		Type: "agent",
+		Fields: map[string]string{
+			"agent":       "worker-active",
+			"agent_state": "working",
+		},
+	}
+
+	// Decision assigned to the done agent — should be skipped.
+	daemon.beads["dec-stale"] = &beadsapi.BeadDetail{
+		ID:       "dec-stale",
+		Type:     "decision",
+		Assignee: "worker-done",
+		Fields:   map[string]string{"question": "Stale?"},
+	}
+	// Decision assigned to the active agent — should be notified.
+	daemon.beads["dec-active"] = &beadsapi.BeadDetail{
+		ID:       "dec-active",
+		Type:     "decision",
+		Assignee: "worker-active",
+		Fields:   map[string]string{"question": "Active?"},
+	}
+
+	notif := &mockNotifier{}
+	d.CatchUpDecisions(context.Background(), daemon, notif, slog.Default())
+
+	created := notif.getCreated()
+	if len(created) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(created))
+	}
+	if created[0].ID != "dec-active" {
+		t.Fatalf("expected dec-active to be notified, got %s", created[0].ID)
+	}
+
+	// Stale decision should be marked as seen so SSE replay skips it too.
+	if !d.Seen("created:dec-stale") {
+		t.Fatal("expected stale decision to be marked as seen")
+	}
+}
+
 func TestDedup_CatchUpDecisions_PrePopulatesDedup(t *testing.T) {
 	d := NewDedup(slog.Default())
 	daemon := newMockDaemon()
