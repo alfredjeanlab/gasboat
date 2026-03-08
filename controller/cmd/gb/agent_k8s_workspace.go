@@ -80,24 +80,28 @@ func setupWorkspace(cfg k8sConfig) error {
 
 // setupPVC creates the .state/{claude,coop} directories on the PVC and
 // symlinks ~/.claude into .state/claude so Claude state survives pod restarts.
-func setupPVC(cfg k8sConfig) error {
+// Returns the resolved claude state directory path — this is ~/.claude when it
+// is a direct PVC subPath mount, or .state/claude when using symlinks.
+func setupPVC(cfg k8sConfig) (string, error) {
 	stateDir := filepath.Join(cfg.workspace, ".state")
 	claudeState := filepath.Join(stateDir, "claude")
 	coopState := filepath.Join(stateDir, "coop")
 
 	for _, d := range []string{claudeState, coopState} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
-			return fmt.Errorf("mkdir %s: %w", d, err)
+			return "", fmt.Errorf("mkdir %s: %w", d, err)
 		}
 	}
 
 	claudeDir := filepath.Join(homeDir(), ".claude")
 	if isMountpoint(claudeDir) {
 		fmt.Printf("[gb agent start] %s is a mount point (subPath) — already PVC-backed\n", claudeDir)
+		// When ~/.claude is a direct mount, session logs live there, not in .state/claude.
+		claudeState = claudeDir
 	} else {
 		os.RemoveAll(claudeDir)
 		if err := os.Symlink(claudeState, claudeDir); err != nil {
-			return fmt.Errorf("symlink %s -> %s: %w", claudeDir, claudeState, err)
+			return "", fmt.Errorf("symlink %s -> %s: %w", claudeDir, claudeState, err)
 		}
 		fmt.Printf("[gb agent start] linked %s -> %s\n", claudeDir, claudeState)
 	}
@@ -111,7 +115,7 @@ func setupPVC(cfg k8sConfig) error {
 		fmt.Printf("[gb agent start] added /usr/local/go/bin to PATH\n")
 	}
 
-	return nil
+	return claudeState, nil
 }
 
 // symlinkClaudeExtensions symlinks .claude/agents, .claude/skills, and

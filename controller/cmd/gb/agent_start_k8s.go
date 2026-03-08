@@ -76,12 +76,12 @@ func runAgentStartK8s(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("workspace setup: %w", err)
 	}
 
-	if err := setupPVC(cfg); err != nil {
+	claudeStateDir, err := setupPVC(cfg)
+	if err != nil {
 		return fmt.Errorf("PVC setup: %w", err)
 	}
 
 	stateDir := cfg.workspace + "/.state"
-	claudeStateDir := stateDir + "/claude"
 	coopStateDir := stateDir + "/coop"
 
 	credMode := provisionCredentials(claudeStateDir)
