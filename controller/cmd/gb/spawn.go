@@ -62,11 +62,11 @@ and the project is inferred from the ticket's labels if not specified.`,
 }
 
 func init() {
-	spawnCmd.Flags().String("role", "crew", "Agent role (e.g. crew, captain, engineer)")
+	spawnCmd.Flags().String("role", "crew", "Agent role(s), comma-separated (e.g. crew, thread,crew)")
 	spawnCmd.Flags().String("task", "", "Pre-assign a task bead (bead ID or ticket reference)")
 	spawnCmd.Flags().String("prompt", "", "Custom prompt injected at agent startup")
 
-	startCmd.Flags().String("role", "crew", "Agent role (e.g. crew, captain, engineer)")
+	startCmd.Flags().String("role", "crew", "Agent role(s), comma-separated (e.g. crew, thread,crew)")
 	startCmd.Flags().String("task", "", "Pre-assign a task bead (bead ID or ticket reference)")
 	startCmd.Flags().String("prompt", "", "Custom prompt injected at agent startup")
 }

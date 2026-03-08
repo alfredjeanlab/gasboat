@@ -19,8 +19,12 @@ func TestModeForRole(t *testing.T) {
 		{"", "job", "job"},
 		{"", "polecat", "job"},
 		{"", "unknown", "crew"},
-		{"crew", "polecat", "crew"}, // explicit mode takes precedence
-		{"job", "crew", "job"},      // explicit mode takes precedence
+		{"crew", "polecat", "crew"},       // explicit mode takes precedence
+		{"job", "crew", "job"},            // explicit mode takes precedence
+		{"", "thread,crew", "crew"},       // multi-role: first role determines mode
+		{"", "job,crew", "job"},           // multi-role: first role is job
+		{"", "captain,thread", "crew"},    // multi-role: first role is captain
+		{"crew", "job,polecat", "crew"},   // explicit mode takes precedence over multi-role
 	}
 	for _, tc := range tests {
 		got := modeForRole(tc.mode, tc.role)

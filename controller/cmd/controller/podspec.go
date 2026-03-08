@@ -15,9 +15,14 @@ import (
 
 // modeForRole returns the canonical mode for a role.
 // If mode is already set, it is returned unchanged.
-func modeForRole(mode, role string) string {
+// For comma-separated roles (e.g. "thread,crew"), the first role determines mode.
+func modeForRole(mode, roles string) string {
 	if mode != "" {
 		return mode
+	}
+	role := roles
+	if i := strings.Index(roles, ","); i >= 0 {
+		role = strings.TrimSpace(roles[:i])
 	}
 	switch role {
 	case "captain", "crew":

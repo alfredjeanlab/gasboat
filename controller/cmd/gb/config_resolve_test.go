@@ -204,6 +204,52 @@ func TestResolveConfigBeads_UnknownCategory(t *testing.T) {
 	}
 }
 
+func TestResolveConfigBeads_MultiRolePrecedence(t *testing.T) {
+	// When an agent has multiple roles (e.g. "thread,crew"), the first role
+	// should have higher precedence (its values override later roles).
+	lister := &mockConfigBeadLister{
+		beads: []*beadsapi.BeadDetail{
+			{
+				Title:       "claude-settings",
+				Labels:      []string{"global"},
+				Description: `{"model":"sonnet","base":"yes"}`,
+			},
+			{
+				Title:       "claude-settings",
+				Labels:      []string{"role:crew"},
+				Description: `{"model":"haiku","crew_setting":"yes"}`,
+			},
+			{
+				Title:       "claude-settings",
+				Labels:      []string{"role:thread"},
+				Description: `{"model":"opus","thread_setting":"yes"}`,
+			},
+		},
+	}
+
+	// thread,crew -> thread is first (higher precedence)
+	subs := []string{"global", "role:thread", "role:crew"}
+	merged, count := ResolveConfigBeads(context.Background(), lister, "claude-settings", subs)
+
+	if count != 3 {
+		t.Fatalf("expected 3 layers, got %d", count)
+	}
+	// role:thread should win for model (first role = highest precedence)
+	if merged["model"] != "opus" {
+		t.Errorf("expected model=opus (first role thread wins), got %v", merged["model"])
+	}
+	// Both role settings should be present
+	if merged["crew_setting"] != "yes" {
+		t.Error("expected crew_setting=yes from role:crew layer")
+	}
+	if merged["thread_setting"] != "yes" {
+		t.Error("expected thread_setting=yes from role:thread layer")
+	}
+	if merged["base"] != "yes" {
+		t.Error("expected base=yes from global layer")
+	}
+}
+
 func TestResolveConfigBeads_SpecificityOrder(t *testing.T) {
 	// Verify that global < rig < role in merge order.
 	lister := &mockConfigBeadLister{

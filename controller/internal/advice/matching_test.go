@@ -270,6 +270,21 @@ func TestFindMatchedLabels(t *testing.T) {
 	}
 }
 
+func TestMatchesSubscriptions_MultiRole(t *testing.T) {
+	// Agent with multiple role subscriptions should match advice for either role
+	subs := []string{"global", "role:thread", "role:crew", "project:gasboat"}
+
+	if !MatchesSubscriptions([]string{"role:crew"}, subs) {
+		t.Error("multi-role agent should match role:crew advice")
+	}
+	if !MatchesSubscriptions([]string{"role:thread"}, subs) {
+		t.Error("multi-role agent should match role:thread advice")
+	}
+	if MatchesSubscriptions([]string{"role:captain"}, subs) {
+		t.Error("multi-role agent should not match role:captain advice")
+	}
+}
+
 func TestBuildScopeHeader(t *testing.T) {
 	tests := []struct {
 		scope, target, want string

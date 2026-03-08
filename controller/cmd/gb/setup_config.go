@@ -436,10 +436,29 @@ func mergeHooksField(dst, src map[string]any) {
 	}
 }
 
+// splitRoles splits a comma-separated role string into individual roles.
+// Returns nil for empty input. Trims whitespace around each role.
+func splitRoles(roles string) []string {
+	if roles == "" {
+		return nil
+	}
+	parts := strings.Split(roles, ",")
+	var result []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
 // buildSubscriptions computes the agent subscription labels for config resolution.
-func buildSubscriptions(role string) []string {
+// Supports comma-separated roles (e.g. "thread,crew") — adds a role: subscription
+// for each role.
+func buildSubscriptions(roles string) []string {
 	subs := []string{"global"}
-	if role != "" {
+	for _, role := range splitRoles(roles) {
 		subs = append(subs, "role:"+role)
 	}
 	if project := os.Getenv("BOAT_PROJECT"); project != "" {

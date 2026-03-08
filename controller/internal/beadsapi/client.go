@@ -293,10 +293,17 @@ func (c *Client) SpawnAgent(ctx context.Context, agentName, project, taskID, rol
 				"agent", agentName, "bead", id, "project", project, "error", err)
 		}
 	}
-	// Best-effort: add a role label so gb prime advice matching can filter by role.
-	if err := c.AddLabel(ctx, id, "role:"+role); err != nil {
-		slog.Warn("failed to add role label to agent bead",
-			"agent", agentName, "bead", id, "role", role, "error", err)
+	// Best-effort: add role label(s) so gb prime advice matching can filter by role.
+	// Supports comma-separated roles (e.g. "thread,crew").
+	for _, r := range strings.Split(role, ",") {
+		r = strings.TrimSpace(r)
+		if r == "" {
+			continue
+		}
+		if err := c.AddLabel(ctx, id, "role:"+r); err != nil {
+			slog.Warn("failed to add role label to agent bead",
+				"agent", agentName, "bead", id, "role", r, "error", err)
+		}
 	}
 	if taskID != "" {
 		// Best-effort: failure to link the task does not prevent agent creation.
