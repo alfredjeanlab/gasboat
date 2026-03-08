@@ -328,6 +328,8 @@ func (b *Bot) handleMessageEvent(ctx context.Context, ev *slackevents.MessageEve
 		if !isMention {
 			if agent := b.getThreadSpawnedAgent(ev.Channel, ev.ThreadTimeStamp); agent != "" {
 				b.handleThreadForward(ctx, ev, agent)
+			} else if agent := b.getAgentByThread(ev.Channel, ev.ThreadTimeStamp); agent != "" {
+				b.hintMentionRequired(ctx, ev.Channel, ev.ThreadTimeStamp, agent)
 			}
 		}
 		return
@@ -348,6 +350,30 @@ func (b *Bot) handleMessageEvent(ctx context.Context, ev *slackevents.MessageEve
 
 	// Non-mention messages in non-thread contexts are ignored.
 	// Users must @mention the bot to interact with agents.
+}
+
+// hintMentionRequired posts a one-time hint in an agent card thread when a
+// user posts without @mentioning the bot. Throttled to at most once per thread
+// per 10 minutes to avoid spam.
+func (b *Bot) hintMentionRequired(ctx context.Context, channel, threadTS, agent string) {
+	key := "hint:" + channel + ":" + threadTS
+	now := time.Now()
+
+	b.mu.Lock()
+	if last, ok := b.lastThreadNudge[key]; ok && now.Sub(last) < 10*time.Minute {
+		b.mu.Unlock()
+		return
+	}
+	b.lastThreadNudge[key] = now
+	b.mu.Unlock()
+
+	hint := fmt.Sprintf(":bulb: _Tip: @mention me so *%s* sees your message._", agent)
+	if b.api != nil {
+		_, _, _ = b.api.PostMessageContext(ctx, channel,
+			slack.MsgOptionText(hint, false),
+			slack.MsgOptionTS(threadTS),
+		)
+	}
 }
 
 // extractAgentName returns the last segment of an agent identity.

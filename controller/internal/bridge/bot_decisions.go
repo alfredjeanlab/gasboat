@@ -232,6 +232,12 @@ func (b *Bot) NotifyDecision(ctx context.Context, bead BeadEvent) error {
 		}
 	}
 
+	if threadSource == "" && agent != "" {
+		b.logger.Warn("decision falling through to flat channel post",
+			"bead", bead.ID, "agent", agent, "channel", targetChannel,
+			"threading_enabled", b.agentThreadingEnabled())
+	}
+
 	// Predecessor threading (within the agent thread or top-level).
 	if predecessorID != "" {
 		if ref, ok := b.lookupMessage(predecessorID); ok && ref.ChannelID == targetChannel {
