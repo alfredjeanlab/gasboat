@@ -89,7 +89,12 @@ func (s *Squawk) handleClosed(ctx context.Context, data []byte) {
 	if s.bot != nil {
 		agentLink := s.bot.agentThreadLink(agent)
 		formatted := fmt.Sprintf(":speech_balloon: %s: %s", agentLink, text)
-		s.bot.postAgentThreadMessage(ctx, agent, formatted)
+
+		// For thread-bound agents, update the spawn confirmation message
+		// in-place with the first squawk instead of posting a separate reply.
+		if !s.bot.tryUpdateSpawnMessage(ctx, agent, formatted) {
+			s.bot.postAgentThreadMessage(ctx, agent, formatted)
+		}
 	}
 }
 

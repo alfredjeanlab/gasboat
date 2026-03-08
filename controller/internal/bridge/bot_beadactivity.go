@@ -110,6 +110,35 @@ func (b *Bot) postAgentThreadMessage(ctx context.Context, agent, text string) {
 	}
 }
 
+// tryUpdateSpawnMessage attempts to update the spawn confirmation message
+// in-place with the given text. Returns true if a spawn message existed and
+// was successfully updated (consuming the ref). Returns false if no spawn
+// message is tracked, allowing the caller to fall back to posting a new reply.
+func (b *Bot) tryUpdateSpawnMessage(ctx context.Context, agent, text string) bool {
+	agent = extractAgentName(agent)
+
+	b.mu.Lock()
+	spawnRef, hasSpawn := b.threadSpawnMsgs[agent]
+	if hasSpawn {
+		delete(b.threadSpawnMsgs, agent)
+	}
+	b.mu.Unlock()
+
+	if !hasSpawn {
+		return false
+	}
+
+	_, _, _, err := b.api.UpdateMessageContext(ctx, spawnRef.ChannelID, spawnRef.Timestamp,
+		slack.MsgOptionText(text, false),
+	)
+	if err != nil {
+		b.logger.Warn("failed to update spawn message with squawk, posting new reply",
+			"agent", agent, "error", err)
+		return false
+	}
+	return true
+}
+
 // getAgentThreadTS returns the thread timestamp for an agent's card,
 // or "" if no card exists. Does not create a card.
 func (b *Bot) getAgentThreadTS(agent string) string {
