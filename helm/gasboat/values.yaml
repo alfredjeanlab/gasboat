@@ -881,6 +881,65 @@ jiraBridge:
 # Watches GitLab for MR merges (webhook + polling) and updates bead fields.
 # Runs independently from the agent controller (separate deployment).
 # =============================================================================
+# =============================================================================
+# Wasteland Bridge — standalone beads→Wasteland (DoltHub) sync bridge
+# Polls DoltHub for wanted items, creates task beads, and syncs claims/closures
+# back via dolt. Runs independently from the agent controller.
+# =============================================================================
+wlBridge:
+  enabled: false
+
+  image:
+    repository: ghcr.io/groblegark/gasboat/wl-bridge
+    tag: ""
+    pullPolicy: Always
+
+  replicaCount: 1
+
+  # Log level: debug, info, warn, error
+  logLevel: ""
+
+  # Wasteland (DoltHub) config
+  wasteland:
+    # DoltHub upstream repo (e.g., "steveyegge/wl-commons")
+    upstream: "steveyegge/wl-commons"
+    # Rig handle for this bridge instance
+    rigHandle: ""
+    # Poll interval (e.g., "5m", "10m")
+    pollInterval: "5m"
+
+  # DoltHub credentials (K8s secret with keys: token, org)
+  dolthub:
+    secretName: ""
+
+  service:
+    type: ClusterIP
+    port: 8092
+
+  # Persistence for dolt clone and bridge state
+  persistence:
+    enabled: false
+    size: 1Gi
+    storageClass: ""
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+  # Pod scheduling
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# =============================================================================
+# GitLab Bridge — standalone beads→GitLab MR merge sync bridge
+# Watches GitLab for MR merges (webhook + polling) and updates bead fields.
+# Runs independently from the agent controller (separate deployment).
+# =============================================================================
 gitlabBridge:
   enabled: false
 

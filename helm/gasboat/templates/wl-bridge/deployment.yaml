@@ -1,0 +1,116 @@
+{{- if .Values.wlBridge.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gasboat.fullname" . }}-wl-bridge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gasboat.labels" . | nindent 4 }}
+    app.kubernetes.io/component: wl-bridge
+spec:
+  replicas: {{ .Values.wlBridge.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "gasboat.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: wl-bridge
+  template:
+    metadata:
+      labels:
+        {{- include "gasboat.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: wl-bridge
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: wl-bridge
+          image: "{{ .Values.wlBridge.image.repository }}:{{ include "gasboat.imageTag" (dict "tag" .Values.wlBridge.image.tag "global" .Values.global "Chart" .Chart) }}"
+          imagePullPolicy: {{ include "gasboat.imagePullPolicy" (dict "pullPolicy" .Values.wlBridge.image.pullPolicy "global" .Values.global) }}
+          ports:
+            - name: http
+              containerPort: 8092
+              protocol: TCP
+          env:
+            # Beads daemon connection
+            - name: BEADS_HTTP_ADDR
+              value: "http://{{ include "gasboat.beads.host" . }}:{{ include "gasboat.beads.httpPort" . }}"
+            {{- if .Values.beads.tokenSecret }}
+            - name: BEADS_DAEMON_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gasboat.beads.tokenSecretName" . }}
+                  key: token
+            {{- end }}
+            # Wasteland config
+            {{- if .Values.wlBridge.wasteland.upstream }}
+            - name: WASTELAND_UPSTREAM
+              value: {{ .Values.wlBridge.wasteland.upstream | quote }}
+            {{- end }}
+            {{- if .Values.wlBridge.wasteland.rigHandle }}
+            - name: WASTELAND_RIG_HANDLE
+              value: {{ .Values.wlBridge.wasteland.rigHandle | quote }}
+            {{- end }}
+            {{- if .Values.wlBridge.wasteland.pollInterval }}
+            - name: WASTELAND_POLL_INTERVAL
+              value: {{ .Values.wlBridge.wasteland.pollInterval | quote }}
+            {{- end }}
+            - name: WASTELAND_DATA_DIR
+              value: "/data/wasteland"
+            - name: WL_LISTEN_ADDR
+              value: ":8092"
+            - name: STATE_PATH
+              value: "/data/wl-bridge-state.json"
+            {{- if .Values.wlBridge.logLevel }}
+            - name: LOG_LEVEL
+              value: {{ .Values.wlBridge.logLevel | quote }}
+            {{- end }}
+            # DoltHub credentials
+            {{- if .Values.wlBridge.dolthub.secretName }}
+            - name: DOLTHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.wlBridge.dolthub.secretName }}
+                  key: token
+            - name: DOLTHUB_ORG
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.wlBridge.dolthub.secretName }}
+                  key: org
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.wlBridge.resources | nindent 12 }}
+      volumes:
+        {{- if .Values.wlBridge.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "gasboat.fullname" . }}-wl-bridge
+        {{- else }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- include "gasboat.nodeSelector" (dict "local" .Values.wlBridge.nodeSelector "global" .Values.global.nodeSelector) | nindent 6 }}
+      {{- with .Values.wlBridge.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.wlBridge.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

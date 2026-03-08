@@ -1,0 +1,20 @@
+{{- if .Values.wlBridge.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gasboat.fullname" . }}-wl-bridge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gasboat.labels" . | nindent 4 }}
+    app.kubernetes.io/component: wl-bridge
+spec:
+  type: {{ .Values.wlBridge.service.type | default "ClusterIP" }}
+  ports:
+    - port: {{ .Values.wlBridge.service.port | default 8092 }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "gasboat.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: wl-bridge
+{{- end }}

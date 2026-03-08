@@ -1,0 +1,19 @@
+{{- if and .Values.wlBridge.enabled .Values.wlBridge.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gasboat.fullname" . }}-wl-bridge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gasboat.labels" . | nindent 4 }}
+    app.kubernetes.io/component: wl-bridge
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.wlBridge.persistence.storageClass }}
+  storageClassName: {{ .Values.wlBridge.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.wlBridge.persistence.size | default "1Gi" }}
+{{- end }}
