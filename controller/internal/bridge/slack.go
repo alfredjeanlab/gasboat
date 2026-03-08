@@ -45,15 +45,39 @@ func NewSlackNotifier(botToken, signingSecret, channel string, daemon BeadClient
 
 // NotifyDecision posts a Block Kit message to Slack for a new decision bead.
 func (s *SlackNotifier) NotifyDecision(ctx context.Context, bead BeadEvent) error {
-	question := bead.Fields["question"]
+	// Support both legacy "question" field and modern "prompt" field.
+	question := bead.Fields["prompt"]
+	if question == "" {
+		question = bead.Fields["question"]
+	}
 	optionsRaw := bead.Fields["options"]
 	agent := bead.Assignee
 
-	// Parse options JSON array.
+	// Parse options — supports both structured objects and plain strings.
 	var options []string
-	if err := json.Unmarshal([]byte(optionsRaw), &options); err != nil {
-		// Try as a single string fallback.
-		options = []string{optionsRaw}
+	var structured []struct {
+		Short string `json:"short"`
+		Label string `json:"label"`
+		ID    string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(optionsRaw), &structured); err == nil && len(structured) > 0 {
+		for _, opt := range structured {
+			title := opt.Short
+			if title == "" {
+				title = opt.Label
+			}
+			if title == "" {
+				title = opt.ID
+			}
+			options = append(options, title)
+		}
+	} else {
+		// Fall back to plain string array.
+		if err := json.Unmarshal([]byte(optionsRaw), &options); err != nil {
+			if optionsRaw != "" {
+				options = []string{optionsRaw}
+			}
+		}
 	}
 
 	// Build Block Kit blocks.
@@ -177,7 +201,10 @@ func (s *SlackNotifier) UpdateDecision(ctx context.Context, beadID, chosen, _ st
 
 // NotifyEscalation posts a highlighted notification for an escalated decision.
 func (s *SlackNotifier) NotifyEscalation(ctx context.Context, bead BeadEvent) error {
-	question := bead.Fields["question"]
+	question := bead.Fields["prompt"]
+	if question == "" {
+		question = bead.Fields["question"]
+	}
 	text := fmt.Sprintf(":rotating_light: ESCALATED: %s — %s", bead.ID, question)
 
 	blocks := []map[string]interface{}{

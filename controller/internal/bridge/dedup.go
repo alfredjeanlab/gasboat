@@ -193,12 +193,14 @@ func (d *Dedup) CatchUpAgents(ctx context.Context, daemon BeadClient, logger *sl
 // beadEventFromDetail converts a BeadDetail to a BeadEvent for notification.
 func beadEventFromDetail(d *beadsapi.BeadDetail) BeadEvent {
 	return BeadEvent{
-		ID:       d.ID,
-		Type:     d.Type,
-		Title:    d.Title,
-		Status:   d.Status,
-		Assignee: d.Assignee,
-		Labels:   d.Labels,
-		Fields:   d.Fields,
+		ID:        d.ID,
+		Type:      d.Type,
+		Title:     d.Title,
+		Status:    d.Status,
+		Assignee:  d.Assignee,
+		CreatedBy: d.CreatedBy,
+		Labels:    d.Labels,
+		Fields:    d.Fields,
+		Priority:  d.Priority,
 	}
 }
