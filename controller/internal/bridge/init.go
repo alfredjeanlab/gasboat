@@ -239,6 +239,21 @@ func configs() map[string]any {
 			},
 		},
 
+		// Scheduled agents: cron-driven autonomous tasks.
+		"type:schedule": TypeConfig{
+			Kind: "config",
+			Fields: []FieldDef{
+				{Name: "cron", Type: "string", Required: true},
+				{Name: "project", Type: "string", Required: true},
+				{Name: "role", Type: "string"},
+				{Name: "prompt", Type: "string", Required: true},
+				{Name: "enabled", Type: "boolean"},
+				{Name: "timezone", Type: "string"},
+				{Name: "last_run", Type: "string"},
+				{Name: "last_agent_id", Type: "string"},
+			},
+		},
+
 		// --- views -----------------------------------------------------------
 		//
 		// Core views used by the controller and by context formulas.
@@ -302,6 +317,14 @@ func configs() map[string]any {
 			Sort:    "title",
 			Columns: []string{"id", "title", "labels"},
 		},
+		"view:schedules": ViewConfig{
+			Filter: ViewFilter{
+				Status: []string{"open", "in_progress"},
+				Type:   []string{"schedule"},
+			},
+			Sort:    "title",
+			Columns: []string{"id", "title", "fields"},
+		},
 
 		// --- contexts --------------------------------------------------------
 		//
@@ -313,6 +336,7 @@ func configs() map[string]any {
 			Sections: []ContextSection{
 				{Header: "## Active Agents", View: "agents:active", Format: "table"},
 				{Header: "## Active Jobs", View: "agents:jobs", Format: "list", Fields: []string{"id", "title", "status"}},
+				{Header: "## Schedules", View: "schedules", Format: "list", Fields: []string{"id", "title", "fields"}},
 				{Header: "## Projects", View: "projects", Format: "table"},
 				{Header: "## Pending Decisions", View: "decisions:pending", Format: "list", Fields: []string{"id", "title", "status"}},
 				{Header: "## Inbox", View: "mail:inbox", Format: "list", Fields: []string{"id", "title", "assignee"}},

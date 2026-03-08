@@ -38,6 +38,7 @@ import (
 	"gasboat/controller/internal/podmanager"
 	"gasboat/controller/internal/poolmanager"
 	"gasboat/controller/internal/reconciler"
+	"gasboat/controller/internal/scheduler"
 	"gasboat/controller/internal/secretreconciler"
 	"gasboat/controller/internal/statusreporter"
 	"gasboat/controller/internal/subscriber"
@@ -125,6 +126,9 @@ func main() {
 	// reconciles projects that have a pool enabled.
 	pool := poolmanager.New(daemon, cfg, logger.With("component", "poolmanager"))
 
+	// Create scheduler for cron-driven scheduled agents.
+	sched := scheduler.New(daemon, logger.With("component", "scheduler"))
+
 	// Start lightweight health/version HTTP server.
 	healthAddr := os.Getenv("HEALTH_LISTEN_ADDR")
 	if healthAddr == "" {
@@ -162,7 +166,7 @@ func main() {
 	defer cancel()
 
 	runFn := func(ctx context.Context) {
-		if err := run(ctx, logger, cfg, k8sClient, watcher, pods, status, rec, daemon, secretRec, pool); err != nil {
+		if err := run(ctx, logger, cfg, k8sClient, watcher, pods, status, rec, daemon, secretRec, pool, sched); err != nil {
 			logger.Error("controller stopped", "error", err)
 			os.Exit(1)
 		}
@@ -223,7 +227,7 @@ func runLeaderElection(ctx context.Context, logger *slog.Logger, cfg *config.Con
 
 // run is the main controller loop. It reads beads events and dispatches
 // pod operations. Separated from main() for testability.
-func run(ctx context.Context, logger *slog.Logger, cfg *config.Config, k8sClient kubernetes.Interface, watcher subscriber.Watcher, pods podmanager.Manager, status statusreporter.Reporter, rec *reconciler.Reconciler, daemon *beadsapi.Client, secretRec *secretreconciler.Reconciler, pool *poolmanager.Manager) error {
+func run(ctx context.Context, logger *slog.Logger, cfg *config.Config, k8sClient kubernetes.Interface, watcher subscriber.Watcher, pods podmanager.Manager, status statusreporter.Reporter, rec *reconciler.Reconciler, daemon *beadsapi.Client, secretRec *secretreconciler.Reconciler, pool *poolmanager.Manager, sched *scheduler.Scheduler) error {
 	// Run reconciler once at startup to catch beads created during downtime.
 	if rec != nil {
 		logger.Info("running startup reconciliation")
@@ -265,6 +269,11 @@ func run(ctx context.Context, logger *slog.Logger, cfg *config.Config, k8sClient
 	// Start prewarmed agent pool reconcile loop if enabled.
 	if pool != nil {
 		go pool.RunLoop(ctx)
+	}
+
+	// Start scheduler for cron-driven scheduled agents.
+	if sched != nil {
+		go sched.RunLoop(ctx, syncInterval)
 	}
 
 	logger.Info("controller ready, waiting for beads events",
