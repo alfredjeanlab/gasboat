@@ -16,7 +16,50 @@ import (
 var adviceCmd = &cobra.Command{
 	Use:     "advice",
 	Short:   "Manage advice beads",
-	Long:    "Advice beads are persistent guidance delivered to agents based on label matching.",
+	Long: `Advice beads are persistent guidance delivered to agents based on label matching.
+
+LABEL MATCHING:
+
+  Labels control which agents receive advice. Targeting labels are:
+  global, project:<name>, role:<name>, agent:<id>
+
+  Ungrouped labels (no prefix) use simple rules:
+    - project: and agent: labels are hard requirements (all must match)
+    - role: labels participate in OR matching
+    - global matches every agent
+
+  When combining --project and --role, they are AND-grouped by default.
+  This is correct for project-specific roles (e.g., mr-tester in monorepo).
+  For global roles (e.g., thread agents across all projects), use the role
+  label alone — do NOT add a project label, or the advice won't reach
+  agents in other projects.
+
+LABELING GUIDE:
+
+  Global role (applies to all projects):
+    gb advice add "tip" --role thread            → role:thread
+
+  Project-specific role:
+    gb advice add "tip" --project monorepo --role mr-tester
+                                                 → g0:project:monorepo, g0:role:mr-tester
+
+  Multiple projects (OR):
+    gb advice add "tip" -l project:gasboat -l project:monorepo
+    gb advice add "tip" --project gasboat --role thread --or-group
+
+GROUP MATCHING (gN: prefix):
+
+  For compound targeting, use the gN: prefix to create label groups:
+    - Labels in the SAME group (same N) are AND'd — all must match
+    - DIFFERENT groups are OR'd — any group matching is sufficient
+
+  Examples:
+    g0:project:gasboat, g0:role:crew      →  (project:gasboat AND role:crew)
+    g0:project:gasboat, g1:role:thread    →  (project:gasboat) OR (role:thread)
+    g0:project:A, g0:role:X, g1:role:Y   →  (project:A AND role:X) OR (role:Y)
+
+  The --project/--role flags AND-group their labels by default (g0:).
+  Use --or-group to create separate OR groups instead.`,
 	GroupID: "orchestration",
 }
 
@@ -25,7 +68,21 @@ var adviceCmd = &cobra.Command{
 var adviceAddCmd = &cobra.Command{
 	Use:   "add <text>",
 	Short: "Create an advice bead",
-	Args:  cobra.ExactArgs(1),
+	Long: `Create an advice bead with targeting labels.
+
+By default, --project and --role are AND-grouped (g0:), meaning agents must
+match ALL of them. Use --or-group to create separate OR groups instead.
+
+Examples:
+  # Match crew agents in gasboat (AND)
+  gb advice add "tip" --project gasboat --role crew
+
+  # Match gasboat agents OR thread agents (OR)
+  gb advice add "tip" --project gasboat --role thread --or-group
+
+  # Custom group labels for complex targeting
+  gb advice add "tip" -l g0:project:gasboat,g0:role:crew -l g1:role:thread`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		text := args[0]
 
@@ -38,10 +95,9 @@ var adviceAddCmd = &cobra.Command{
 		rig, _ := cmd.Flags().GetString("rig")
 		role, _ := cmd.Flags().GetString("role")
 		agent, _ := cmd.Flags().GetString("agent")
+		orGroup, _ := cmd.Flags().GetBool("or-group")
 
-		// Collect shorthand targeting labels, then AND-group them by default.
-		// Multiple targeting labels (e.g. --role=cleanup --project=gasboat) mean
-		// "match agents that satisfy ALL of these", not any one of them.
+		// Collect shorthand targeting labels.
 		var targeting []string
 		if project != "" {
 			targeting = append(targeting, "project:"+project)
@@ -55,8 +111,16 @@ var adviceAddCmd = &cobra.Command{
 			targeting = append(targeting, "agent:"+agent)
 		}
 		if len(targeting) > 1 {
-			for _, l := range targeting {
-				labels = append(labels, "g0:"+l)
+			if orGroup {
+				// OR mode: each targeting label gets its own group number.
+				for i, l := range targeting {
+					labels = append(labels, fmt.Sprintf("g%d:%s", i, l))
+				}
+			} else {
+				// AND mode (default): all targeting labels share g0.
+				for _, l := range targeting {
+					labels = append(labels, "g0:"+l)
+				}
 			}
 		} else {
 			labels = append(labels, targeting...)
@@ -239,6 +303,7 @@ func init() {
 	adviceAddCmd.Flags().String("rig", "", "deprecated: use --project instead")
 	adviceAddCmd.Flags().String("role", "", "shorthand for --label role:<value>")
 	adviceAddCmd.Flags().String("agent", "", "shorthand for --label agent:<value>")
+	adviceAddCmd.Flags().Bool("or-group", false, "OR-group --project/--role/--agent labels (default is AND)")
 	adviceAddCmd.Flags().Lookup("rig").Hidden = true
 	adviceAddCmd.Flags().String("hook-command", "", "shell command to execute")
 	adviceAddCmd.Flags().String("hook-trigger", "", "when to run")
