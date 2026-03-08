@@ -149,7 +149,7 @@ func resolveNudgeFromConfig(promptType string, vars nudgeVars) string {
 	role := os.Getenv("BOAT_ROLE")
 	project := defaultGBProject()
 
-	subs := []string{"global:*"}
+	subs := []string{"global"}
 	if project != "" {
 		subs = append(subs, "project:"+project)
 	}

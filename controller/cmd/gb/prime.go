@@ -165,7 +165,7 @@ func outputWorkflowContext(w io.Writer, role string) {
 	ctx := context.Background()
 
 	// Build subscriptions for config resolution.
-	subs := []string{"global:*"}
+	subs := []string{"global"}
 	if role != "" {
 		subs = append(subs, "role:"+role)
 	}
