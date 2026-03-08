@@ -118,16 +118,23 @@ func (b *Bot) NotifyDecision(ctx context.Context, bead BeadEvent) error {
 
 		if len(optObjs) > 0 {
 			for i, opt := range optObjs {
-				// Build display: Short is the concise title, Label is the description.
-				// Show both when available so the option title is visible.
+				// Build display: prefer Short, fall back to Label, then ID.
 				title := opt.Short
+				if title == "" {
+					title = opt.Label
+				}
 				if title == "" {
 					title = opt.ID
 				}
+
+				// Show Label as description if it differs from the title.
 				desc := opt.Label
+				if desc == title {
+					desc = ""
+				}
 
 				var optText string
-				if desc != "" && desc != title {
+				if desc != "" {
 					optText = fmt.Sprintf("*%d. %s*\n%s", i+1, title, desc)
 				} else {
 					optText = fmt.Sprintf("*%d. %s*", i+1, title)
