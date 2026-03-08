@@ -216,6 +216,8 @@ func configs() map[string]any {
 				{Name: "vars", Type: "json"},
 				// Step definitions: [{id, title, type, description, depends_on, labels, priority, condition, assignee}]
 				{Name: "steps", Type: "json"},
+				// Default agent to assign molecules to when this formula is poured.
+				{Name: "assigned_agent", Type: "string"},
 			},
 		},
 		"type:molecule": TypeConfig{
