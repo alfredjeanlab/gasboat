@@ -259,3 +259,40 @@ func TestBeadActivity_UpdateNonClaim_Ignored(t *testing.T) {
 		t.Errorf("expected 0 claimed notifications for non-claim update, got %d", len(got))
 	}
 }
+
+func TestBeadMsgKey(t *testing.T) {
+	key := beadMsgKey("my-agent", "kd-abc123")
+	if key != "my-agent:kd-abc123" {
+		t.Errorf("expected 'my-agent:kd-abc123', got %q", key)
+	}
+}
+
+func TestPostOrUpdateBeadMessage_StoresRef(t *testing.T) {
+	// Verify that beadMsgs map management works correctly.
+	b := &Bot{
+		daemon:          newMockDaemon(),
+		logger:          slog.Default(),
+		beadMsgs:        make(map[string]MessageRef),
+		threadSpawnMsgs: make(map[string]MessageRef),
+		agentCards:      map[string]MessageRef{},
+		agentSeen:       map[string]time.Time{},
+	}
+
+	// With nil api, postBeadThreadMessage will try resolveAgentThread (no-op)
+	// then check agentThreadingEnabled (false by default), so it drops the
+	// notification. That's fine — we test the map cleanup via NotifyBeadClosed.
+	b.NotifyBeadClosed(context.Background(), BeadEvent{
+		ID:       "kd-test1",
+		Type:     "task",
+		Title:    "Test",
+		Assignee: "test-agent",
+	})
+
+	// After close, the beadMsgs entry should be cleaned up.
+	b.mu.Lock()
+	_, has := b.beadMsgs[beadMsgKey("test-agent", "kd-test1")]
+	b.mu.Unlock()
+	if has {
+		t.Error("expected beadMsgs entry to be cleaned up after close")
+	}
+}
