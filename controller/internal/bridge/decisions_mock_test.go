@@ -220,6 +220,22 @@ func (m *mockDaemon) AddDependency(_ context.Context, _, _, _, _ string) error {
 	return nil
 }
 
+func (m *mockDaemon) UpdateBeadFields(_ context.Context, beadID string, fields map[string]string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	bead, ok := m.beads[beadID]
+	if !ok {
+		return fmt.Errorf("bead %s not found", beadID)
+	}
+	if bead.Fields == nil {
+		bead.Fields = make(map[string]string)
+	}
+	for k, v := range fields {
+		bead.Fields[k] = v
+	}
+	return nil
+}
+
 func (m *mockDaemon) ResolveTicket(_ context.Context, ticketKey string) (*beadsapi.BeadDetail, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

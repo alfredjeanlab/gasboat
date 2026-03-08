@@ -24,15 +24,18 @@ type formulaVarDef struct {
 
 // formulaStep matches the kbeads FormulaStep type.
 type formulaStep struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description,omitempty"`
-	Type        string   `json:"type,omitempty"`
-	Priority    *int     `json:"priority,omitempty"`
-	Labels      []string `json:"labels,omitempty"`
-	DependsOn   []string `json:"depends_on,omitempty"`
-	Assignee    string   `json:"assignee,omitempty"`
-	Condition   string   `json:"condition,omitempty"`
+	ID              string   `json:"id"`
+	Title           string   `json:"title"`
+	Description     string   `json:"description,omitempty"`
+	Type            string   `json:"type,omitempty"`
+	Priority        *int     `json:"priority,omitempty"`
+	Labels          []string `json:"labels,omitempty"`
+	DependsOn       []string `json:"depends_on,omitempty"`
+	Assignee        string   `json:"assignee,omitempty"`
+	Condition       string   `json:"condition,omitempty"`
+	Role            string   `json:"role,omitempty"`              // target role for this step (empty = inherit molecule context)
+	Project         string   `json:"project,omitempty"`           // target project (empty = inherit molecule project)
+	SuggestNewAgent bool     `json:"suggest_new_agent,omitempty"` // hint that a dedicated agent should handle this step
 }
 
 // formulaFields holds the parsed vars and steps from a formula bead's fields.
@@ -203,7 +206,22 @@ func (b *Bot) handleFormulaShow(ctx context.Context, cmd slack.SlashCommand, idO
 			if len(s.DependsOn) > 0 {
 				deps = fmt.Sprintf(" (after: %s)", strings.Join(s.DependsOn, ", "))
 			}
-			sb.WriteString(fmt.Sprintf("  `%s` %s [%s]%s\n", s.ID, s.Title, typ, deps))
+			transition := ""
+			if s.Project != "" {
+				transition += " → project:" + s.Project
+			}
+			if s.Role != "" {
+				if transition == "" {
+					transition += " →"
+				} else {
+					transition += ","
+				}
+				transition += " role:" + s.Role
+			}
+			if s.SuggestNewAgent {
+				transition += " :zap:new agent"
+			}
+			sb.WriteString(fmt.Sprintf("  `%s` %s [%s]%s%s\n", s.ID, s.Title, typ, deps, transition))
 		}
 	}
 
@@ -294,6 +312,8 @@ func (b *Bot) handleFormulaPour(ctx context.Context, cmd slack.SlashCommand, arg
 		es.Title = formulaSubstituteVars(s.Title, varPairs)
 		es.Description = formulaSubstituteVars(s.Description, varPairs)
 		es.Assignee = formulaSubstituteVars(s.Assignee, varPairs)
+		es.Role = formulaSubstituteVars(s.Role, varPairs)
+		es.Project = formulaSubstituteVars(s.Project, varPairs)
 		expanded = append(expanded, es)
 	}
 
@@ -399,6 +419,7 @@ func (b *Bot) instantiateFormulaSteps(
 
 	// Create child beads for each step.
 	stepBeadIDs := make(map[string]string, len(steps))
+	crossProjectSteps := make(map[string]map[string]string) // stepID → {"project": X, "bead_id": Y}
 	for _, s := range steps {
 		typ := s.Type
 		if typ == "" {
@@ -409,20 +430,25 @@ func (b *Bot) instantiateFormulaSteps(
 			pri = *s.Priority
 		}
 
-		stepLabels := labels
-		if len(s.Labels) > 0 {
-			seen := make(map[string]bool)
-			var merged []string
-			for _, l := range labels {
-				seen[l] = true
-				merged = append(merged, l)
-			}
-			for _, l := range s.Labels {
-				if !seen[l] {
-					merged = append(merged, l)
-				}
-			}
-			stepLabels = merged
+		// Determine step-level project: use step's project override or molecule's project.
+		stepProject := project
+		if s.Project != "" {
+			stepProject = s.Project
+		}
+
+		// Build step labels with correct project scope.
+		stepLabels := formulaBuildStepLabels(labels, s.Labels, stepProject, project)
+
+		// Add role label if step specifies a target role.
+		if s.Role != "" {
+			stepLabels = append(stepLabels, "role:"+s.Role)
+		}
+
+		// Build step-level fields for suggest_new_agent hint.
+		var stepFields json.RawMessage
+		if s.SuggestNewAgent {
+			sf, _ := json.Marshal(map[string]any{"suggest_new_agent": true})
+			stepFields = sf
 		}
 
 		stepID, err := b.daemon.CreateBead(ctx, beadsapi.CreateBeadRequest{
@@ -432,16 +458,36 @@ func (b *Bot) instantiateFormulaSteps(
 			Priority:    pri,
 			Labels:      stepLabels,
 			Assignee:    s.Assignee,
+			Fields:      stepFields,
 		})
 		if err != nil {
 			return molID, len(stepBeadIDs), fmt.Errorf("creating step %q: %w", s.ID, err)
 		}
 		stepBeadIDs[s.ID] = stepID
 
+		// Track cross-project steps for molecule metadata.
+		if s.Project != "" && s.Project != project {
+			crossProjectSteps[s.ID] = map[string]string{
+				"project": s.Project,
+				"bead_id": stepID,
+			}
+		}
+
 		// Link step to molecule as parent-child.
 		if err := b.daemon.AddDependency(ctx, stepID, molID, "parent-child", "slack-bridge"); err != nil {
 			b.logger.Warn("formula pour: failed to add parent-child dep",
 				"step", s.ID, "stepBead", stepID, "molecule", molID, "error", err)
+		}
+	}
+
+	// Store cross-project step references on the molecule for tracking.
+	if len(crossProjectSteps) > 0 {
+		xStepsJSON, _ := json.Marshal(crossProjectSteps)
+		if err := b.daemon.UpdateBeadFields(ctx, molID, map[string]string{
+			"cross_project_steps": string(xStepsJSON),
+		}); err != nil {
+			b.logger.Warn("formula pour: failed to store cross-project steps",
+				"molecule", molID, "error", err)
 		}
 	}
 
@@ -514,6 +560,41 @@ func parseFormulaFields(bead *beadsapi.BeadDetail) formulaFields {
 		_ = json.Unmarshal([]byte(raw), &ff.Steps)
 	}
 	return ff
+}
+
+// formulaBuildStepLabels builds the label set for a step bead, handling
+// project overrides and per-step label merging.
+func formulaBuildStepLabels(molLabels, stepLabels []string, stepProject, molProject string) []string {
+	seen := make(map[string]bool)
+	var merged []string
+
+	// Start with molecule labels, but replace project label if step overrides it.
+	for _, l := range molLabels {
+		if strings.HasPrefix(l, "project:") && stepProject != molProject {
+			continue // skip molecule's project label; we'll add the step's project
+		}
+		seen[l] = true
+		merged = append(merged, l)
+	}
+
+	// Add step-specific project label if overridden.
+	if stepProject != molProject && stepProject != "" {
+		projLabel := "project:" + stepProject
+		if !seen[projLabel] {
+			seen[projLabel] = true
+			merged = append(merged, projLabel)
+		}
+	}
+
+	// Merge per-step labels.
+	for _, l := range stepLabels {
+		if !seen[l] {
+			seen[l] = true
+			merged = append(merged, l)
+		}
+	}
+
+	return merged
 }
 
 // formulaVarPattern matches {{variable}} placeholders.

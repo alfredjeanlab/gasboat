@@ -32,6 +32,7 @@ type BeadClient interface {
 	ListBeadsFiltered(ctx context.Context, q beadsapi.ListBeadsQuery) (*beadsapi.ListBeadsResult, error)
 	AddDependency(ctx context.Context, beadID, dependsOnID, depType, createdBy string) error
 	ResolveTicket(ctx context.Context, ticketKey string) (*beadsapi.BeadDetail, error)
+	UpdateBeadFields(ctx context.Context, beadID string, fields map[string]string) error
 }
 
 // BeadEvent is the JSON payload published on beads.bead.created / beads.bead.closed.
