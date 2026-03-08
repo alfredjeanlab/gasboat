@@ -322,12 +322,18 @@ func (b *Bot) handleMessageEvent(ctx context.Context, ev *slackevents.MessageEve
 			return
 		}
 
-		// Forward to bound agent only if this is a thread-spawned agent thread.
-		// Agent card threads (status/notification threads) require an @mention.
+		// Forward to bound agent only if this is a thread-spawned agent thread
+		// with --listen mode enabled. Without --listen, thread agents require
+		// an @mention (same as agent card threads).
 		// Skip messages containing @mention — those are handled by app_mention event.
 		if !isMention {
 			if agent := b.getThreadSpawnedAgent(ev.Channel, ev.ThreadTimeStamp); agent != "" {
-				b.handleThreadForward(ctx, ev, agent)
+				// Only auto-forward if --listen was set on the original spawn mention.
+				if b.state != nil && b.state.IsListenThread(ev.Channel, ev.ThreadTimeStamp) {
+					b.handleThreadForward(ctx, ev, agent)
+				} else {
+					b.hintMentionRequired(ctx, ev.Channel, ev.ThreadTimeStamp, agent)
+				}
 			} else if agent := b.getAgentByThread(ev.Channel, ev.ThreadTimeStamp); agent != "" {
 				b.hintMentionRequired(ctx, ev.Channel, ev.ThreadTimeStamp, agent)
 			}

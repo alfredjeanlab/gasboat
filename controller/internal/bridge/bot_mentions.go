@@ -288,6 +288,27 @@ func (b *Bot) resolveAgentFromText(ctx context.Context, text string) (string, st
 	return "", text
 }
 
+// parseListenFlag checks for a --listen flag in mention text.
+// If present, returns (true, text_without_flag). Otherwise returns (false, text).
+// When --listen is used on a thread spawn, the agent receives ALL thread replies,
+// not just @mentions.
+func parseListenFlag(text string) (bool, string) {
+	words := strings.Fields(text)
+	filtered := make([]string, 0, len(words))
+	found := false
+	for _, w := range words {
+		if w == "--listen" {
+			found = true
+			continue
+		}
+		filtered = append(filtered, w)
+	}
+	if found {
+		return true, strings.Join(filtered, " ")
+	}
+	return false, text
+}
+
 // parseProjectOverride extracts a project override from mention text.
 // Supports two syntaxes:
 //   - "project:gasboat fix the helm chart" → ("gasboat", "fix the helm chart")
@@ -341,6 +362,9 @@ func (b *Bot) handleThreadSpawn(ctx context.Context, ev *slackevents.AppMentionE
 		}
 	}
 
+	// Check for --listen flag (auto-forward all thread replies without @mention).
+	listen, text := parseListenFlag(text)
+
 	// Check for explicit project override in the mention text.
 	// Supports "project:<name>" and "--project <name>" syntax.
 	projectOverride, text := parseProjectOverride(text)
@@ -375,10 +399,13 @@ func (b *Bot) handleThreadSpawn(ctx context.Context, ev *slackevents.AppMentionE
 	if beadID, assignedAgent := b.tryPoolAssign(ctx, channel, threadTS, description, project); beadID != "" {
 		b.logger.Info("thread-spawn: assigned prewarmed agent",
 			"bead", beadID, "agent", assignedAgent,
-			"channel", channel, "thread_ts", threadTS)
+			"channel", channel, "thread_ts", threadTS, "listen", listen)
 
 		if b.state != nil {
 			_ = b.state.SetThreadAgent(channel, threadTS, assignedAgent)
+			if listen {
+				_ = b.state.SetListenThread(channel, threadTS)
+			}
 		}
 		if b.api != nil {
 			_, msgTS, _ := b.api.PostMessage(channel,
@@ -440,6 +467,9 @@ func (b *Bot) handleThreadSpawn(ctx context.Context, ev *slackevents.AppMentionE
 	// Record thread→agent mapping in state.
 	if b.state != nil {
 		_ = b.state.SetThreadAgent(channel, threadTS, agentName)
+		if listen {
+			_ = b.state.SetListenThread(channel, threadTS)
+		}
 	}
 
 	// Post confirmation reply in thread.
@@ -606,172 +636,6 @@ func isValidThreadBinding(channel, threadTS string) bool {
 	return true
 }
 
-// fetchMessageFiles re-fetches a single message to extract its Files array.
-// Both AppMentionEvent and MessageEvent in slack-go lack a Files field,
-// so we call GetConversationReplies with Limit:1+Inclusive to get the full message.
-func (b *Bot) fetchMessageFiles(ctx context.Context, channel, ts string) []slack.File {
-	if b.api == nil {
-		return nil
-	}
-	msgs, _, _, err := b.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
-		ChannelID: channel,
-		Timestamp: ts,
-		Limit:     1,
-		Inclusive:  true,
-	})
-	if err != nil {
-		b.logger.Debug("failed to fetch message files", "channel", channel, "ts", ts, "error", err)
-		return nil
-	}
-	for _, msg := range msgs {
-		if msg.Timestamp == ts {
-			return msg.Files
-		}
-	}
-	return nil
-}
-
-// formatAttachmentsSection builds a markdown "## Attachments" block for bead descriptions.
-func formatAttachmentsSection(files []slack.File) string {
-	if len(files) == 0 {
-		return ""
-	}
-	var buf strings.Builder
-	buf.WriteString("\n\n## Attachments\n")
-	for _, f := range files {
-		proxyURL := "/api/slack/files/" + f.ID
-		buf.WriteString(fmt.Sprintf("- **%s** (%s, %s) — `%s`\n", f.Name, f.Mimetype, formatFileSize(f.Size), proxyURL))
-	}
-	return buf.String()
-}
-
-// formatFileSize returns a human-readable file size string.
-func formatFileSize(bytes int) string {
-	switch {
-	case bytes >= 1024*1024:
-		return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
-	case bytes >= 1024:
-		return fmt.Sprintf("%.1f KB", float64(bytes)/1024)
-	default:
-		return fmt.Sprintf("%d B", bytes)
-	}
-}
-
-// slackFilesToFields returns bead fields for attachment metadata.
-func slackFilesToFields(files []slack.File) map[string]string {
-	if len(files) == 0 {
-		return nil
-	}
-	fields := map[string]string{
-		"slack_attachment_count": fmt.Sprintf("%d", len(files)),
-	}
-	for _, f := range files {
-		if strings.HasPrefix(f.Mimetype, "image/") {
-			fields["slack_has_images"] = "true"
-			break
-		}
-	}
-	return fields
-}
-
-// threadNudgeInterval is the minimum time between nudges for the same agent+thread.
-const threadNudgeInterval = 30 * time.Second
-
-// handleThreadForward creates a tracking bead and nudges the bound agent when
-// a non-mention message is posted in an agent thread.
-func (b *Bot) handleThreadForward(ctx context.Context, ev *slackevents.MessageEvent, agent string) {
-	agentName := extractAgentName(agent)
-
-	// Validate the agent is still active.
-	if _, err := b.daemon.FindAgentBead(ctx, agentName); err != nil {
-		b.logger.Info("thread-forward: agent no longer active, respawning with session resume",
-			"agent", agentName, "channel", ev.Channel, "thread_ts", ev.ThreadTimeStamp)
-		// Agent is gone — respawn the SAME agent name so the entrypoint
-		// finds the existing session JSONL and PVC for session continuity.
-		b.respawnThreadAgent(ctx, ev.Channel, ev.ThreadTimeStamp, agentName, ev.Text)
-		return
-	}
-
-	// Resolve sender display name.
-	username := ev.User
-	if b.api != nil {
-		if user, err := b.api.GetUserInfo(ev.User); err == nil {
-			if user.RealName != "" {
-				username = user.RealName
-			} else if user.Name != "" {
-				username = user.Name
-			}
-		}
-	}
-
-	// Build bead description.
-	title := truncateText(fmt.Sprintf("Thread: %s", ev.Text), 80)
-	slackTag := fmt.Sprintf("[slack:%s:%s]", ev.Channel, ev.ThreadTimeStamp)
-	description := fmt.Sprintf("Thread reply from %s in Slack:\n\n%s\n\n---\n%s", username, ev.Text, slackTag)
-
-	// Enrich with file attachments.
-	files := b.fetchMessageFiles(ctx, ev.Channel, ev.TimeStamp)
-	description += formatAttachmentsSection(files)
-
-	var fieldsJSON json.RawMessage
-	if fileFields := slackFilesToFields(files); fileFields != nil {
-		fieldsJSON, _ = json.Marshal(fileFields)
-	}
-
-	// Create tracking bead.
-	beadID, err := b.daemon.CreateBead(ctx, beadsapi.CreateBeadRequest{
-		Title:       title,
-		Type:        "task",
-		Kind:        "issue",
-		Description: description,
-		Assignee:    agentName,
-		Labels:      []string{"slack-thread-reply"},
-		Priority:    3,
-		Fields:      fieldsJSON,
-	})
-	if err != nil {
-		b.logger.Error("failed to create thread-forward bead",
-			"channel", ev.Channel, "agent", agentName, "error", err)
-		return
-	}
-
-	b.logger.Info("thread-forward: created tracking bead",
-		"bead", beadID, "agent", agentName, "user", username)
-
-	// Persist message ref for response relay.
-	if b.state != nil {
-		_ = b.state.SetChatMessage(beadID, MessageRef{
-			ChannelID: ev.Channel,
-			Timestamp: ev.ThreadTimeStamp,
-			Agent:     agent,
-		})
-	}
-
-	// Nudge with throttling — avoid flooding the agent in active threads.
-	if !b.shouldThrottleNudge(agentName, ev.ThreadTimeStamp) {
-		message := fmt.Sprintf("Slack thread reply (bead %s): %s", beadID, truncateText(ev.Text, 200))
-		client := &http.Client{Timeout: 10 * time.Second}
-		if err := NudgeAgent(ctx, b.daemon, client, b.logger, agentName, message); err != nil {
-			b.logger.Error("failed to nudge agent for thread forward",
-				"agent", agentName, "bead", beadID, "error", err)
-		}
-	}
-}
-
-// shouldThrottleNudge returns true if a nudge was sent recently for this agent+thread.
-// Updates the last nudge time if not throttled.
-func (b *Bot) shouldThrottleNudge(agent, threadTS string) bool {
-	key := agent + ":" + threadTS
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if last, ok := b.lastThreadNudge[key]; ok && time.Since(last) < threadNudgeInterval {
-		b.logger.Debug("thread-forward: nudge throttled",
-			"agent", agent, "thread_ts", threadTS, "last_nudge_ago", time.Since(last))
-		return true
-	}
-	b.lastThreadNudge[key] = time.Now()
-	return false
-}
 
 // stripBotMention removes all <@BOTID> occurrences from text and trims whitespace.
 func stripBotMention(text, botUserID string) string {

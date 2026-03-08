@@ -659,6 +659,70 @@ func TestParseProjectOverride(t *testing.T) {
 	}
 }
 
+func TestParseListenFlag(t *testing.T) {
+	tests := []struct {
+		name          string
+		text          string
+		wantListen    bool
+		wantRemaining string
+	}{
+		{
+			name:          "no flag",
+			text:          "fix the helm chart",
+			wantListen:    false,
+			wantRemaining: "fix the helm chart",
+		},
+		{
+			name:          "listen at start",
+			text:          "--listen fix the helm chart",
+			wantListen:    true,
+			wantRemaining: "fix the helm chart",
+		},
+		{
+			name:          "listen at end",
+			text:          "fix the helm chart --listen",
+			wantListen:    true,
+			wantRemaining: "fix the helm chart",
+		},
+		{
+			name:          "listen in middle",
+			text:          "fix --listen the helm chart",
+			wantListen:    true,
+			wantRemaining: "fix the helm chart",
+		},
+		{
+			name:          "listen only",
+			text:          "--listen",
+			wantListen:    true,
+			wantRemaining: "",
+		},
+		{
+			name:          "empty text",
+			text:          "",
+			wantListen:    false,
+			wantRemaining: "",
+		},
+		{
+			name:          "listen with project",
+			text:          "--listen project:gasboat fix things",
+			wantListen:    true,
+			wantRemaining: "project:gasboat fix things",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			listen, remaining := parseListenFlag(tt.text)
+			if listen != tt.wantListen {
+				t.Errorf("listen = %v, want %v", listen, tt.wantListen)
+			}
+			if remaining != tt.wantRemaining {
+				t.Errorf("remaining = %q, want %q", remaining, tt.wantRemaining)
+			}
+		})
+	}
+}
+
 func TestSanitizeTS(t *testing.T) {
 	tests := []struct {
 		input string

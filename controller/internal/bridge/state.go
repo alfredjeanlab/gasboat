@@ -34,6 +34,7 @@ type StateData struct {
 	ChatMessages     map[string]MessageRef `json:"chat_messages,omitempty"`     // bead ID → message ref (chat forwarding)
 	AgentCards       map[string]MessageRef `json:"agent_cards,omitempty"`       // agent identity → status card message ref
 	ThreadAgents     map[string]string     `json:"thread_agents,omitempty"`     // "{channel}:{thread_ts}" → agent identity
+	ListenThreads    map[string]bool       `json:"listen_threads,omitempty"`    // "{channel}:{thread_ts}" → true if --listen mode
 	Dashboard        *DashboardRef         `json:"dashboard,omitempty"`
 	LastEventID      string                `json:"last_event_id,omitempty"` // SSE event ID for reconnection
 }
@@ -55,6 +56,7 @@ func NewStateManager(path string) (*StateManager, error) {
 			ChatMessages:     make(map[string]MessageRef),
 			AgentCards:       make(map[string]MessageRef),
 			ThreadAgents:     make(map[string]string),
+			ListenThreads:    make(map[string]bool),
 		},
 	}
 	if err := sm.load(); err != nil && !os.IsNotExist(err) {
@@ -237,6 +239,31 @@ func (sm *StateManager) ClearAllThreadAgents() (int, error) {
 	return n, sm.saveLocked()
 }
 
+// --- Listen Threads ---
+
+// IsListenThread returns whether a thread has --listen mode enabled.
+func (sm *StateManager) IsListenThread(channel, threadTS string) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.data.ListenThreads[threadAgentKey(channel, threadTS)]
+}
+
+// SetListenThread marks a thread as having --listen mode and persists.
+func (sm *StateManager) SetListenThread(channel, threadTS string) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.data.ListenThreads[threadAgentKey(channel, threadTS)] = true
+	return sm.saveLocked()
+}
+
+// RemoveListenThread removes the --listen flag for a thread and persists.
+func (sm *StateManager) RemoveListenThread(channel, threadTS string) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	delete(sm.data.ListenThreads, threadAgentKey(channel, threadTS))
+	return sm.saveLocked()
+}
+
 // --- Dashboard ---
 
 // GetDashboard returns the dashboard message ref.
@@ -297,6 +324,9 @@ func (sm *StateManager) load() error {
 	}
 	if sm.data.ThreadAgents == nil {
 		sm.data.ThreadAgents = make(map[string]string)
+	}
+	if sm.data.ListenThreads == nil {
+		sm.data.ListenThreads = make(map[string]bool)
 	}
 	return nil
 }

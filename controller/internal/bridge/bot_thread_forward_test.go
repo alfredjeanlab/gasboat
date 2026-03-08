@@ -74,7 +74,7 @@ func TestHandleMessageEvent_ThreadForward_AgentCardThread_NoForward(t *testing.T
 	}
 }
 
-func TestHandleMessageEvent_ThreadForward_ThreadSpawnedAgent(t *testing.T) {
+func TestHandleMessageEvent_ThreadForward_ThreadSpawnedAgent_WithListen(t *testing.T) {
 	daemon := newMockDaemon()
 	daemon.beads["thread-1111-2222"] = &beadsapi.BeadDetail{
 		ID:    "bd-thread-agent",
@@ -93,6 +93,7 @@ func TestHandleMessageEvent_ThreadForward_ThreadSpawnedAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = state.SetThreadAgent("C-support", "1111.2222", "thread-1111-2222")
+	_ = state.SetListenThread("C-support", "1111.2222") // --listen mode
 
 	b := &Bot{
 		daemon:          daemon,
@@ -127,6 +128,49 @@ func TestHandleMessageEvent_ThreadForward_ThreadSpawnedAgent(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected a task bead with label slack-thread-reply assigned to thread-1111-2222")
+	}
+}
+
+func TestHandleMessageEvent_ThreadForward_ThreadSpawnedAgent_NoListen(t *testing.T) {
+	// Without --listen, thread-spawned agents should NOT auto-forward non-mention replies.
+	daemon := newMockDaemon()
+	daemon.beads["thread-1111-2222"] = &beadsapi.BeadDetail{
+		ID:    "bd-thread-agent",
+		Title: "thread-1111-2222",
+		Type:  "agent",
+		Fields: map[string]string{
+			"agent":                "thread-1111-2222",
+			"slack_thread_channel": "C-support",
+			"slack_thread_ts":      "1111.2222",
+		},
+	}
+
+	dir := t.TempDir()
+	state, err := NewStateManager(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = state.SetThreadAgent("C-support", "1111.2222", "thread-1111-2222")
+	// No SetListenThread — default is mention-only
+
+	b := &Bot{
+		daemon:          daemon,
+		state:           state,
+		logger:          slog.Default(),
+		botUserID:       "U-BOT",
+		agentCards:      map[string]MessageRef{},
+		lastThreadNudge: make(map[string]time.Time),
+	}
+
+	// Verify getThreadSpawnedAgent finds the agent.
+	agent := b.getThreadSpawnedAgent("C-support", "1111.2222")
+	if agent != "thread-1111-2222" {
+		t.Fatalf("expected thread-1111-2222, got %q", agent)
+	}
+
+	// But IsListenThread should be false.
+	if state.IsListenThread("C-support", "1111.2222") {
+		t.Error("expected listen mode to be false by default")
 	}
 }
 
@@ -358,6 +402,7 @@ func TestHandleThreadForward_BeadAlwaysCreated(t *testing.T) {
 	}
 	// Use a thread-spawned agent (not agent card) for forwarding.
 	_ = state.SetThreadAgent("C-agents", "1111.2222", "hq")
+	_ = state.SetListenThread("C-agents", "1111.2222") // --listen mode for auto-forward
 
 	b := &Bot{
 		daemon:          daemon,
